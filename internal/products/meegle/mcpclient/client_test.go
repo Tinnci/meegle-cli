@@ -42,8 +42,38 @@ func TestCallToolSuccess(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected map, got %T", resp.Data)
 	}
-	if m["id"] != float64(123) {
+	if m["id"] != json.Number("123") {
 		t.Errorf("expected id=123, got %v", m["id"])
+	}
+}
+
+func TestCallToolPreservesJSONNumberLexemes(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req jsonRPCRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		resp := makeRPCResponse(req.ID, json.RawMessage(`{"content":[{"type":"text","text":"{\"large\":9007199254740993,\"beyond_int64\":123456789012345678901234567890,\"decimal\":1.2300,\"exponent\":1e+30}"}]}`))
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	resp, err := New(server.URL).CallTool(context.Background(), "test_tool", nil)
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	data, ok := resp.Data.(map[string]any)
+	if !ok {
+		t.Fatalf("data = %#v (%T), want object", resp.Data, resp.Data)
+	}
+	wants := map[string]json.Number{
+		"large":        "9007199254740993",
+		"beyond_int64": "123456789012345678901234567890",
+		"decimal":      "1.2300",
+		"exponent":     "1e+30",
+	}
+	for key, want := range wants {
+		if got := data[key]; got != want {
+			t.Errorf("%s = %#v (%T), want %#v", key, got, got, want)
+		}
 	}
 }
 

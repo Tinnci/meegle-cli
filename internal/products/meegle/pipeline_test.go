@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/larksuite/meegle-cli/internal/products/meegle/auth"
@@ -23,6 +24,7 @@ import (
 	"github.com/larksuite/meegle-cli/pkg/framework/pipeline"
 	"github.com/larksuite/meegle-cli/pkg/framework/registry"
 	"github.com/larksuite/meegle-cli/pkg/framework/router"
+	"github.com/larksuite/meegle-cli/pkg/integrations/formatting"
 	"github.com/larksuite/meegle-cli/pkg/runtime/cliapp"
 )
 
@@ -958,11 +960,145 @@ func TestMcpExecutorStep_DryRunSkipsMeegleRuntimeFlags(t *testing.T) {
 	if _, ok := params["profile"]; ok {
 		t.Fatalf("profile should not be sent to backend: %#v", params)
 	}
-	if params["action"] != "this_week" || params["page_num"] != float64(1) {
+	if params["action"] != "this_week" || params["page_num"] != json.Number("1") {
 		t.Fatalf("business params changed unexpectedly: %#v", params)
 	}
 	if _, present := data["validation"]; present {
 		t.Fatalf("runtime flags should not appear as unknown params: %#v", data["validation"])
+	}
+}
+
+func TestMcpExecutorStep_DryRunPreservesLargeNumberFlag(t *testing.T) {
+	step := &McpExecutorStep{}
+	state := &pipeline.PipelineContext{
+		Parsed: &router.ParsedCommand{
+			FullPath: []string{"example", "number"},
+			Node: &registry.CommandNode{
+				HandlerRef: "number_tool",
+				Meta: registry.NodeMeta{Tags: map[string]string{
+					"mcp_param_types": `{"amount":"number"}`,
+				}},
+			},
+			Flags: map[string]any{
+				"dry-run": true,
+				"amount":  "123456789012345678901234567890",
+			},
+			ExplicitFlags: map[string]any{
+				"dry-run": true,
+				"amount":  "123456789012345678901234567890",
+			},
+		},
+	}
+	if err := step.Execute(context.Background(), state); err != nil {
+		t.Fatalf("dry-run execute: %v", err)
+	}
+	result := state.Result.Data.(map[string]any)
+	params := result["params"].(map[string]any)
+	if got, want := params["amount"], json.Number("123456789012345678901234567890"); got != want {
+		t.Fatalf("amount = %#v (%T), want %#v (%T)", got, got, want, want)
+	}
+}
+
+func TestMcpExecutorStep_DryRunPreservesIntegerBeyondInt64(t *testing.T) {
+	const raw = "123456789012345678901234567890"
+	state := &pipeline.PipelineContext{Parsed: &router.ParsedCommand{
+		Node: &registry.CommandNode{HandlerRef: "integer_tool", Meta: registry.NodeMeta{Tags: map[string]string{
+			"mcp_param_types": `{"id":"integer"}`,
+		}}},
+		Flags:         map[string]any{"dry-run": true, "id": raw},
+		ExplicitFlags: map[string]any{"dry-run": true, "id": raw},
+	}}
+	if err := (&McpExecutorStep{}).Execute(context.Background(), state); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	got := state.Result.Data.(map[string]any)["params"].(map[string]any)["id"]
+	if want := json.Number(raw); got != want {
+		t.Fatalf("id = %#v (%T), want %#v", got, got, want)
+	}
+}
+
+func TestMcpExecutorStep_AcceptsTableNumberAsNextCommandInput(t *testing.T) {
+	const rawID = "123456789012345678901234567890"
+	displayed := formatting.RenderCell(json.Number(rawID), 10)
+	state := &pipeline.PipelineContext{Parsed: &router.ParsedCommand{
+		Node: &registry.CommandNode{HandlerRef: "number_tool", Meta: registry.NodeMeta{Tags: map[string]string{
+			"mcp_param_types": `{"id":"number"}`,
+		}}},
+		Flags:         map[string]any{"dry-run": true, "id": displayed},
+		ExplicitFlags: map[string]any{"dry-run": true, "id": displayed},
+	}}
+	if err := (&McpExecutorStep{}).Execute(context.Background(), state); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	params := state.Result.Data.(map[string]any)["params"].(map[string]any)
+	if got, want := params["id"], json.Number(rawID); got != want {
+		t.Fatalf("round-trip id = %#v (%T), want %#v", got, got, want)
+	}
+}
+
+func TestMcpExecutorStep_DryRunPreservesNumberInFixedParams(t *testing.T) {
+	step := &McpExecutorStep{}
+	state := &pipeline.PipelineContext{Parsed: &router.ParsedCommand{
+		FullPath: []string{"example", "fixed"},
+		Node: &registry.CommandNode{HandlerRef: "fixed_tool", Meta: registry.NodeMeta{Tags: map[string]string{
+			"mcp_fixed_params": `{"id":9007199254740993,"decimal":1.2300}`,
+		}}},
+		Flags:         map[string]any{"dry-run": true},
+		ExplicitFlags: map[string]any{"dry-run": true},
+	}}
+	if err := step.Execute(context.Background(), state); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	params := state.Result.Data.(map[string]any)["params"].(map[string]any)
+	if got, want := params["id"], json.Number("9007199254740993"); got != want {
+		t.Fatalf("id = %#v (%T), want %#v", got, got, want)
+	}
+	if got, want := params["decimal"], json.Number("1.2300"); got != want {
+		t.Fatalf("decimal = %#v (%T), want %#v", got, got, want)
+	}
+}
+
+func TestMcpExecutorStep_DryRunPreservesNumbersInObjectAndArrayFlags(t *testing.T) {
+	step := &McpExecutorStep{}
+	state := &pipeline.PipelineContext{
+		Parsed: &router.ParsedCommand{
+			FullPath: []string{"example", "structured"},
+			Node: &registry.CommandNode{
+				HandlerRef: "structured_tool",
+				Meta: registry.NodeMeta{Tags: map[string]string{
+					"mcp_param_types": `{"detail":"object","amounts":"array"}`,
+					"mcp_param_items": `{"amounts":"number"}`,
+				}},
+			},
+			Flags: map[string]any{
+				"dry-run": true,
+				"detail":  `{"id":9007199254740993,"ratio":1.234567890123456789}`,
+				"amounts": []string{`[9007199254740993,123456789012345678901234567890]`},
+			},
+			ExplicitFlags: map[string]any{
+				"dry-run": true,
+				"detail":  `{"id":9007199254740993,"ratio":1.234567890123456789}`,
+				"amounts": []string{`[9007199254740993,123456789012345678901234567890]`},
+			},
+		},
+	}
+	if err := step.Execute(context.Background(), state); err != nil {
+		t.Fatalf("dry-run execute: %v", err)
+	}
+	params := state.Result.Data.(map[string]any)["params"].(map[string]any)
+	detail := params["detail"].(map[string]any)
+	amounts := params["amounts"].([]any)
+	if got, want := detail["id"], json.Number("9007199254740993"); got != want {
+		t.Fatalf("detail.id = %#v (%T), want %#v (%T)", got, got, want, want)
+	}
+	if got, want := detail["ratio"], json.Number("1.234567890123456789"); got != want {
+		t.Fatalf("detail.ratio = %#v (%T), want %#v (%T)", got, got, want, want)
+	}
+	if got, want := amounts[0], json.Number("9007199254740993"); got != want {
+		t.Fatalf("amounts[0] = %#v (%T), want %#v (%T)", got, got, want, want)
+	}
+	if got, want := amounts[1], json.Number("123456789012345678901234567890"); got != want {
+		t.Fatalf("amounts[1] = %#v (%T), want %#v (%T)", got, got, want, want)
 	}
 }
 
@@ -1016,6 +1152,50 @@ func TestNewPipelineFactory_DryRunSupportedEndToEnd(t *testing.T) {
 	}
 	if state.Result == nil || state.Result.Data == nil {
 		t.Fatal("expected dry-run pipeline to populate Result.Data")
+	}
+}
+
+func TestNewPipelineFactory_DryRunPreservesLargeJSONNumberFromParams(t *testing.T) {
+	factory := newPipelineFactory(NewDynamicRegistrySetup(nil, nil), nil, nil)
+	pipe, err := factory(cliapp.Config{})
+	if err != nil {
+		t.Fatalf("pipeline factory: %v", err)
+	}
+	state := &pipeline.PipelineContext{
+		Parsed: &router.ParsedCommand{
+			FullPath: []string{"workitem", "get"},
+			Node: &registry.CommandNode{
+				HandlerRef: "get_workitem_brief",
+				Flags: []registry.FlagDef{
+					{Name: "work-item-id", Required: true, Type: registry.FlagTypeString},
+				},
+				Meta: registry.NodeMeta{Tags: map[string]string{
+					"mcp_param_types": `{"work-item-id":"string"}`,
+				}},
+			},
+			Flags: map[string]any{
+				"dry-run": true,
+				"params":  `{"work_item_id":9007199254740993}`,
+			},
+			ExplicitFlags: map[string]any{
+				"dry-run": true,
+				"params":  `{"work_item_id":9007199254740993}`,
+			},
+		},
+	}
+	if err := pipe.Execute(context.Background(), state); err != nil {
+		t.Fatalf("pipeline execute (dry-run): %v", err)
+	}
+	result, ok := state.Result.Data.(map[string]any)
+	if !ok {
+		t.Fatalf("dry-run result = %T, want map[string]any", state.Result.Data)
+	}
+	params, ok := result["params"].(map[string]any)
+	if !ok {
+		t.Fatalf("dry-run params = %#v, want map[string]any", result["params"])
+	}
+	if got, want := params["work_item_id"], json.Number("9007199254740993"); got != want {
+		t.Fatalf("work_item_id = %#v (%T), want %#v (%T)", got, got, want, want)
 	}
 }
 
@@ -1198,13 +1378,29 @@ func TestCoerceArray_MultiplePlainStringsKeptAsStrings(t *testing.T) {
 }
 
 func TestCoerceArray_MultipleNumericItemsParsed(t *testing.T) {
-	got := coerceArray([]string{"1", "2", "3"}, "number")
-	arr, ok := got.([]float64)
+	got := coerceArray([]string{"1", "9007199254740993", "123456789012345678901234567890"}, "number")
+	arr, ok := got.([]json.Number)
 	if !ok {
-		t.Fatalf("type = %T, want []float64", got)
+		t.Fatalf("type = %T, want []json.Number", got)
 	}
-	if len(arr) != 3 || arr[0] != 1 || arr[2] != 3 {
+	if len(arr) != 3 || arr[0] != "1" || arr[1] != "9007199254740993" || arr[2] != "123456789012345678901234567890" {
 		t.Fatalf("arr = %#v", arr)
+	}
+}
+
+func TestCoerceArray_MultipleIntegerItemsParsedWithoutRangeLimit(t *testing.T) {
+	got := coerceArray([]string{"9007199254740993", "123456789012345678901234567890"}, "integer")
+	arr, ok := got.([]json.Number)
+	if !ok {
+		t.Fatalf("type = %T, want []json.Number", got)
+	}
+	if len(arr) != 2 || arr[0] != "9007199254740993" || arr[1] != "123456789012345678901234567890" {
+		t.Fatalf("arr = %#v", arr)
+	}
+
+	invalid := coerceArray([]string{"1", "1.5"}, "integer")
+	if _, parsed := invalid.([]json.Number); parsed {
+		t.Fatalf("integer array must not coerce a decimal item: %#v", invalid)
 	}
 }
 
@@ -1793,6 +1989,169 @@ func TestAutoPaginateStep_PageNumMergesPages(t *testing.T) {
 	}
 	if meta["pages_merged"] != 2 {
 		t.Errorf("expected pages_merged=2, got %v", meta["pages_merged"])
+	}
+}
+
+func TestAutoPaginateStep_PageNumPreservesTotalBeyondInt64(t *testing.T) {
+	const rawTotal = "123456789012345678901234567890"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(mcpJSONResponse(t, map[string]any{
+			"list": []any{"b"},
+			"pagination": map[string]any{
+				"has_more": false,
+				"total":    json.Number(rawTotal),
+			},
+		}))
+	}))
+	defer server.Close()
+
+	state := &pipeline.PipelineContext{
+		Parsed: &router.ParsedCommand{
+			Node: &registry.CommandNode{HandlerRef: "list_todo", Meta: registry.NodeMeta{Tags: map[string]string{
+				"mcp_param_types": `{"page-num":"integer"}`,
+			}}},
+			Flags: map[string]any{"auto-paginate": true},
+		},
+		Result: &executor.RawResult{Data: map[string]any{
+			"list": []any{"a"},
+			"pagination": map[string]any{
+				"has_more": true,
+				"total":    json.Number(rawTotal),
+			},
+		}, Metadata: map[string]any{}},
+		OutputConfig: map[string]any{
+			"mcp.server_url": server.URL,
+			"mcp.token":      "tok",
+			"mcp.headers":    map[string]string{},
+		},
+	}
+
+	if err := (&AutoPaginateStep{}).Execute(context.Background(), state); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	data := state.Result.Data.(map[string]any)
+	if got, want := data["total"], json.Number(rawTotal); got != want {
+		t.Fatalf("total = %#v (%T), want %#v", got, got, want)
+	}
+	if got := len(data["list"].([]any)); got != 2 {
+		t.Fatalf("merged list length = %d, want 2", got)
+	}
+}
+
+func TestAutoPaginateStep_PageNumOmitsNonPositiveOrNullTotal(t *testing.T) {
+	for _, total := range []any{
+		json.Number("0"),
+		json.Number("0e999999"),
+		json.Number("-0"),
+		json.Number("-1"),
+		json.Number("1.5"),
+		nil,
+	} {
+		t.Run(fmt.Sprintf("%v", total), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_ = json.NewEncoder(w).Encode(mcpJSONResponse(t, map[string]any{
+					"list":       []any{},
+					"pagination": map[string]any{"has_more": false, "total": total},
+				}))
+			}))
+			defer server.Close()
+
+			state := &pipeline.PipelineContext{
+				Parsed: &router.ParsedCommand{
+					Node: &registry.CommandNode{HandlerRef: "list_todo", Meta: registry.NodeMeta{Tags: map[string]string{
+						"mcp_param_types": `{"page-num":"integer"}`,
+					}}},
+					Flags: map[string]any{"auto-paginate": true},
+				},
+				Result: &executor.RawResult{Data: map[string]any{
+					"list":       []any{"a"},
+					"pagination": map[string]any{"has_more": true, "total": total},
+				}, Metadata: map[string]any{}},
+				OutputConfig: map[string]any{
+					"mcp.server_url": server.URL,
+					"mcp.token":      "tok",
+					"mcp.headers":    map[string]string{},
+				},
+			}
+
+			if err := (&AutoPaginateStep{}).Execute(context.Background(), state); err != nil {
+				t.Fatalf("Execute: %v", err)
+			}
+			data := state.Result.Data.(map[string]any)
+			if _, exists := data["total"]; exists {
+				t.Fatalf("total = %#v, want omitted", data["total"])
+			}
+		})
+	}
+}
+
+func TestAutoPaginateStep_RejectsInvalidPageNumberControlValue(t *testing.T) {
+	for _, page := range []json.Number{"1.5", "123456789012345678901234567890", json.Number(fmt.Sprint(maxIntValue()))} {
+		t.Run(page.String(), func(t *testing.T) {
+			state := &pipeline.PipelineContext{
+				Parsed: &router.ParsedCommand{
+					Node: &registry.CommandNode{HandlerRef: "list_todo", Meta: registry.NodeMeta{Tags: map[string]string{
+						"mcp_param_types": `{"page-num":"integer"}`,
+					}}},
+					Flags:         map[string]any{"auto-paginate": true, "page-num": page},
+					ExplicitFlags: map[string]any{"page-num": page},
+				},
+				Result: &executor.RawResult{Data: map[string]any{
+					"list":       []any{"a"},
+					"pagination": map[string]any{"has_more": true},
+				}},
+			}
+			err := (&AutoPaginateStep{}).Execute(context.Background(), state)
+			var meegleErr *meerrors.MeegleError
+			if !errors.As(err, &meegleErr) || meegleErr.Code != "CLIENT_INVALID_PARAM" {
+				t.Fatalf("error = %v, want CLIENT_INVALID_PARAM", err)
+			}
+		})
+	}
+}
+
+func TestToIntAcceptsIntegralJSONNumberForms(t *testing.T) {
+	for _, value := range []json.Number{"1", "1.0", "1e0"} {
+		if got, ok := toInt(value); !ok || got != 1 {
+			t.Errorf("toInt(%q) = (%d, %v), want (1, true)", value, got, ok)
+		}
+	}
+}
+
+func TestAutoPaginateStep_MaxIntPageNumberFailsBeforeRequest(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		calls.Add(1)
+		writer.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	page := json.Number(fmt.Sprint(maxIntValue()))
+	state := &pipeline.PipelineContext{
+		Parsed: &router.ParsedCommand{
+			Node: &registry.CommandNode{HandlerRef: "list_todo", Meta: registry.NodeMeta{Tags: map[string]string{
+				"mcp_param_types": `{"page-num":"integer"}`,
+			}}},
+			Flags:         map[string]any{"auto-paginate": true, "page-num": page},
+			ExplicitFlags: map[string]any{"page-num": page},
+		},
+		Result: &executor.RawResult{Data: map[string]any{
+			"list":       []any{"a"},
+			"pagination": map[string]any{"has_more": true},
+		}},
+		OutputConfig: map[string]any{
+			"mcp.server_url": server.URL,
+			"mcp.token":      "tok",
+			"mcp.headers":    map[string]string{},
+		},
+	}
+	err := (&AutoPaginateStep{}).Execute(context.Background(), state)
+	var meegleErr *meerrors.MeegleError
+	if !errors.As(err, &meegleErr) || meegleErr.Code != "CLIENT_INVALID_PARAM" {
+		t.Fatalf("error = %v, want CLIENT_INVALID_PARAM", err)
+	}
+	if got := calls.Load(); got != 0 {
+		t.Fatalf("follow-up requests = %d, want 0", got)
 	}
 }
 

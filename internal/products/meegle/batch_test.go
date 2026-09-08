@@ -5,6 +5,7 @@ package meegle
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -38,10 +39,11 @@ func siblingGetNode() *registry.CommandNode {
 		Flags: []registry.FlagDef{
 			{Name: "work-item-id", Type: registry.FlagTypeString, Required: true},
 			{Name: "fields", Type: registry.FlagTypeStringSlice},
+			{Name: "page-size", Type: registry.FlagTypeInteger},
 			{Name: "project-key", Type: registry.FlagTypeString},
 		},
 		Meta: registry.NodeMeta{Tags: map[string]string{
-			"mcp_param_types": `{"work-item-id":"number","fields":"array","project-key":"string"}`,
+			"mcp_param_types": `{"work-item-id":"number","fields":"array","page-size":"integer","project-key":"string"}`,
 			"mcp_param_items": `{"fields":"string"}`,
 		}},
 	}
@@ -74,11 +76,11 @@ func TestInjectBatchCommands_InheritsFromSibling(t *testing.T) {
 	if !containsStr(batch.Aliases, "+get-batch") {
 		t.Errorf("expected alias '+get-batch', got %v", batch.Aliases)
 	}
-	// Flags must inherit project-key and fields, drop work-item-id (replaced
+	// Flags must inherit project-key, fields, and page-size, drop work-item-id (replaced
 	// by --work-item-ids), and add --ids-file.
 	got := flagNames(batch.Flags)
 	sort.Strings(got)
-	want := []string{"fields", "ids-file", "project-key", "work-item-ids"}
+	want := []string{"fields", "ids-file", "page-size", "project-key", "work-item-ids"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("unexpected flags: got %v, want %v", got, want)
 	}
@@ -215,7 +217,7 @@ func TestCollectBatchIDs_FromFlag(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
-	want := []int64{10, 20, 30}
+	want := []json.Number{"10", "20", "30"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got %v, want %v", got, want)
 	}
@@ -228,7 +230,7 @@ func TestCollectBatchIDs_FromFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
-	if !reflect.DeepEqual(got, []int64{100, 200, 300}) {
+	if !reflect.DeepEqual(got, []json.Number{"100", "200", "300"}) {
 		t.Errorf("got %v, want [100 200 300]", got)
 	}
 }
@@ -243,9 +245,23 @@ func TestCollectBatchIDs_MergeAndDedupePreservesOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
-	want := []int64{10, 20, 40}
+	want := []json.Number{"10", "20", "40"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got %v, want %v (flag comes first, dupes dropped)", got, want)
+	}
+}
+
+func TestCollectBatchIDs_AcceptsIntegralJSONNumberFormsAndDedupes(t *testing.T) {
+	state := batchState(map[string]any{
+		"work-item-ids": []string{"1.0", "1e3", "1000", "-0", "0", "1e1000001"},
+	})
+	got, err := collectBatchIDs(state)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	want := []json.Number{"1.0", "1e3", "-0", "1e1000001"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
 	}
 }
 
@@ -316,7 +332,7 @@ func TestBatchExecutorStep_AllSuccess(t *testing.T) {
 		"work-item-ids": []string{"1,2,3"},
 	})
 	caller := &fakeCaller{handler: func(params map[string]any) (*mcpResponse, error) {
-		id := int64(params["work_item_id"].(float64))
+		id, _ := params["work_item_id"].(json.Number).Int64()
 		return &mcpResponse{Data: map[string]any{"id": id, "name": fmt.Sprintf("WI-%d", id)}}, nil
 	}}
 	step := &BatchExecutorStep{clientFactory: func(*pipeline.PipelineContext) mcpToolCaller { return caller }}
@@ -336,11 +352,31 @@ func TestBatchExecutorStep_AllSuccess(t *testing.T) {
 		t.Errorf("unexpected summary: %v", summary)
 	}
 	// Order must match input (after dedupe): 1, 2, 3
-	for i, want := range []int64{1, 2, 3} {
-		got, _ := results[i]["work_item_id"].(int64)
+	for i, want := range []json.Number{"1", "2", "3"} {
+		got, _ := results[i]["work_item_id"].(json.Number)
 		if got != want {
-			t.Errorf("result[%d]: got id=%d, want %d", i, got, want)
+			t.Errorf("result[%d]: got id=%s, want %s", i, got, want)
 		}
+	}
+}
+
+func TestBatchExecutorStep_PreservesIDBeyondInt64(t *testing.T) {
+	const rawID = "123456789012345678901234567890"
+	state := batchState(map[string]any{"work-item-ids": []string{rawID}})
+	caller := &fakeCaller{handler: func(params map[string]any) (*mcpResponse, error) {
+		return &mcpResponse{Data: map[string]any{"ok": true}}, nil
+	}}
+	step := &BatchExecutorStep{clientFactory: func(*pipeline.PipelineContext) mcpToolCaller { return caller }}
+
+	if err := step.Execute(context.Background(), state); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if got, want := caller.calls[0]["work_item_id"], json.Number(rawID); got != want {
+		t.Fatalf("request work_item_id = %#v (%T), want %#v", got, got, want)
+	}
+	result := state.Result.Data.(map[string]any)["results"].([]map[string]any)[0]
+	if got, want := result["work_item_id"], json.Number(rawID); got != want {
+		t.Fatalf("output work_item_id = %#v (%T), want %#v", got, got, want)
 	}
 }
 
@@ -349,7 +385,7 @@ func TestBatchExecutorStep_PartialFailure(t *testing.T) {
 		"work-item-ids": []string{"1,2,3"},
 	})
 	caller := &fakeCaller{handler: func(params map[string]any) (*mcpResponse, error) {
-		id := int64(params["work_item_id"].(float64))
+		id, _ := params["work_item_id"].(json.Number).Int64()
 		if id == 2 {
 			return nil, meerrors.NewServerError("NOT_FOUND", "work item not found")
 		}
@@ -370,7 +406,7 @@ func TestBatchExecutorStep_PartialFailure(t *testing.T) {
 	if len(errs) != 1 {
 		t.Fatalf("expected 1 error, got %d", len(errs))
 	}
-	if errs[0]["work_item_id"].(int64) != 2 || errs[0]["code"] != "NOT_FOUND" {
+	if errs[0]["work_item_id"].(json.Number) != json.Number("2") || errs[0]["code"] != "NOT_FOUND" {
 		t.Errorf("unexpected error entry: %v", errs[0])
 	}
 	if summary["succeeded"] != 2 || summary["failed"] != 1 {
@@ -400,7 +436,7 @@ func TestBatchExecutorStep_AllFail_ReturnsPayloadNotError(t *testing.T) {
 func TestBatchExecutorStep_AuthErrorIsGlobalTerminate(t *testing.T) {
 	state := batchState(map[string]any{"work-item-ids": []string{"1,2,3"}})
 	caller := &fakeCaller{handler: func(params map[string]any) (*mcpResponse, error) {
-		id := int64(params["work_item_id"].(float64))
+		id, _ := params["work_item_id"].(json.Number).Int64()
 		if id == 2 {
 			return nil, meerrors.NewClientError("AUTH_EXPIRED", "authentication expired, please log in again")
 		}
@@ -587,7 +623,6 @@ func TestBatchExecutorStep_ParentCtxCancelReturnsCtxErr(t *testing.T) {
 	state := batchState(map[string]any{"work-item-ids": []string{"1,2,3,4,5,6,7,8"}})
 
 	caller := &fakeCaller{handler: func(params map[string]any) (*mcpResponse, error) {
-		t.Fatal("handler should not be called when ctx is cancelled before Execute")
 		return nil, nil
 	}}
 	step := &BatchExecutorStep{clientFactory: func(*pipeline.PipelineContext) mcpToolCaller { return caller }}
@@ -601,6 +636,9 @@ func TestBatchExecutorStep_ParentCtxCancelReturnsCtxErr(t *testing.T) {
 	}
 	if state.Result != nil {
 		t.Errorf("expected Result to remain nil on ctx cancel, got %+v", state.Result)
+	}
+	if len(caller.calls) != 0 {
+		t.Fatalf("handler should not be called when ctx is cancelled before Execute; calls=%d", len(caller.calls))
 	}
 }
 
@@ -702,15 +740,69 @@ func TestBatchExecutorStep_SharedParamsForwarded(t *testing.T) {
 		t.Errorf("expected project_key='my_project', got %v (keys: %v)", captured["project_key"], keysOf(captured))
 	}
 	// Sibling fixture declares work-item-id as MCP type "number" — so the
-	// per-item value goes through coerceValue and lands as float64.
-	if v, ok := captured["work_item_id"].(float64); !ok || v != 1 {
-		t.Errorf("expected per-item work_item_id=1 (float64), got %v (%T)", captured["work_item_id"], captured["work_item_id"])
+	// per-item value goes through coerceValue and retains its numeric lexeme.
+	if v, ok := captured["work_item_id"].(json.Number); !ok || v != json.Number("1") {
+		t.Errorf("expected per-item work_item_id=1 (json.Number), got %v (%T)", captured["work_item_id"], captured["work_item_id"])
 	}
 	// CLI-only flags and the kebab-cased per-item flag must not be sent.
 	for _, leak := range []string{"work-item-ids", "ids-file", "work-item-id", "project-key"} {
 		if _, found := captured[leak]; found {
 			t.Errorf("%q leaked into MCP params: %v", leak, captured)
 		}
+	}
+}
+
+func TestBatchExecutorStep_InvalidStructuredNumericParamStopsBeforeTransport(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		flags map[string]any
+	}{
+		{name: "params", flags: map[string]any{"params": `{"score":"bad-score","page_size":"bad-page-size"}`}},
+		{name: "set", flags: map[string]any{"set": []string{"score=bad-score", "page_size=bad-page-size"}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			caller := &fakeCaller{handler: func(map[string]any) (*mcpResponse, error) {
+				return &mcpResponse{Data: nil}, nil
+			}}
+			const attempts = 32
+			for attempt := 0; attempt < attempts; attempt++ {
+				flags := map[string]any{"work-item-ids": []string{"1", "2"}}
+				explicit := map[string]any{"work-item-ids": flags["work-item-ids"]}
+				for key, value := range test.flags {
+					flags[key] = value
+					explicit[key] = value
+				}
+				state := batchState(flags)
+				state.Parsed.Node.Flags = append(state.Parsed.Node.Flags, registry.FlagDef{
+					Name: "score", Type: registry.FlagTypeNumber,
+				})
+				state.Parsed.Node.Meta.Tags["mcp_param_types"] = `{"work-item-id":"number","fields":"array","page-size":"integer","project-key":"string","score":"number"}`
+				state.Parsed.ExplicitFlags = explicit
+
+				if err := (&pipeline.ParamMergeStep{}).Execute(context.Background(), state); err != nil {
+					t.Fatalf("attempt %d merge structured params: %v", attempt, err)
+				}
+				if err := (&StructuredFlagNameNormalizeStep{}).Execute(context.Background(), state); err != nil {
+					t.Fatalf("attempt %d normalize structured params: %v", attempt, err)
+				}
+
+				step := &BatchExecutorStep{clientFactory: func(*pipeline.PipelineContext) mcpToolCaller { return caller }}
+				err := step.Execute(context.Background(), state)
+				if err == nil {
+					t.Fatalf("attempt %d unexpectedly succeeded", attempt)
+				}
+				var meegleErr *meerrors.MeegleError
+				if !errors.As(err, &meegleErr) || meegleErr.Code != "CLIENT_INVALID_PARAM" {
+					t.Fatalf("attempt %d error = %v, want CLIENT_INVALID_PARAM", attempt, err)
+				}
+				if want := `parameter "page_size" must be a valid JSON integer`; !strings.Contains(err.Error(), want) {
+					t.Fatalf("attempt %d error = %q, want %q", attempt, err, want)
+				}
+			}
+			if len(caller.calls) != 0 {
+				t.Fatalf("backend calls = %d, want 0", len(caller.calls))
+			}
+		})
 	}
 }
 

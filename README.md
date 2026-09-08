@@ -615,16 +615,24 @@ missing required parameters: --user-key, --work-item-type
 
 ### --set key=value (Generic)
 
-`--set` is an alternate syntax for writing **top-level** parameters — `--set key=value` is equivalent to typing `--key value`. Useful when scripting with a uniform `key=value` form, or for writing nested top-level params via dot-path. Values are auto-typed (int / float / bool / string).
+`--set` is an alternate syntax for writing **top-level** parameters. For values whose inferred type matches the command schema, `--set key=value` is equivalent to typing `--key value`. It is useful when scripting with a uniform `key=value` form, or for writing nested top-level params via dot-path. Valid JSON numbers are kept as exact numbers (including large integers, high-precision decimals, and exponent notation), `true` / `false` become booleans, and other values remain strings.
 
 ```bash
 # These two are equivalent:
 meegle mywork todo --action this_week --page-num 1
 meegle mywork todo --set action=this_week --set page_num=1
 
+# Exact JSON number; no float64 or int64 conversion:
+--set work_item_id=9007199254740993
+
+# Not a valid JSON number, so it remains the string "01":
+--set external_id=01
+
 # Dot-path builds nested maps (rarely used in Meegle, but supported):
 --set extra.flag=true          # becomes {"extra":{"flag":true}}
 ```
+
+Schema-declared scalar numeric parameters use the same exact representation whether supplied through a named flag, `--params`, or `--set`. `number` accepts any valid JSON number; `integer` additionally requires an integral value but is not limited to Go's `int64` range. Non-JSON spellings such as `+1` and `01`, as well as non-numeric JSON values, are rejected before the request is sent when the schema requires a scalar number or integer. Explicit CLI control flags such as pagination indexes remain range-checked where required.
 
 `--set` only writes **top-level** parameters. To write a work item's `fields[]`, use `--params '{"fields":[...]}'` (see below).
 

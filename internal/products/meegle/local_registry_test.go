@@ -92,3 +92,17 @@ func TestLocalMappedCommandsDerivesNestedCommandsAndParameters(t *testing.T) {
 		t.Fatalf("related-context inspect parameter = %#v", contextParam)
 	}
 }
+
+func TestInspectParameterTypesIncludeExactNumericFlags(t *testing.T) {
+	for _, flagType := range []string{registry.FlagTypeNumber, registry.FlagTypeInteger} {
+		if got := inspectParameterType(flagType); got != "number" {
+			t.Fatalf("inspectParameterType(%q) = %q, want number", flagType, got)
+		}
+	}
+	if got := inspectParameterType(registry.FlagTypeIntegerSlice); got != "array" {
+		t.Fatalf("inspectParameterType(integer-slice) = %q, want array", got)
+	}
+	if got := inspectParameterItemType(registry.FlagTypeIntegerSlice); got != "number" {
+		t.Fatalf("inspectParameterItemType(integer-slice) = %q, want number", got)
+	}
+}

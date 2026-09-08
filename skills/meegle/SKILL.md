@@ -118,8 +118,7 @@ description: |
 
 ## Attachment 附件域
 
-附件上传/下载分两步：先调 `attachment prepare-upload` / `attachment prepare-download` 申请带签名的对象存储 URL，再与对象存储做 HTTP 直连。Meegle CLI 提供 `attachment +upload` / `attachment +download` 一键封装。详细参数表与流程说明见 [references/attachment.md](references/attachment.md)。
-
+附件必须完成“对象存储上传 → 目标字段绑定 → 回读同一字段验收”；上传成功不代表附件字段已写入。涉及工作项附件时，必须先实时消歧当前类型下的 `file` 和 `multi-file` 字段，并按 [references/attachment.md](references/attachment.md) 的完整协议执行。Meegle CLI 提供 `attachment +upload` / `attachment +download` 一键封装对象存储步骤。
 ---
 
 ## WorkFlow 工作流域

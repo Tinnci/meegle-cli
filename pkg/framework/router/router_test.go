@@ -6,6 +6,7 @@ package router
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -171,6 +172,138 @@ func TestCommandRouterStringArrayPreservesJSONAndRepeats(t *testing.T) {
 		if raw[i] != w {
 			t.Errorf("element %d = %q, want %q (CSV splitting must not fire for StringArray)", i, raw[i], w)
 		}
+	}
+}
+
+func TestParseInputPreservesExactNumericFlags(t *testing.T) {
+	reg, err := registry.New(&registry.CommandTree{Nodes: []*registry.CommandNode{{
+		Name:       "run",
+		Help:       registry.HelpText{Brief: "Run"},
+		HandlerRef: "core.run",
+		Flags: []registry.FlagDef{
+			{Name: "amount", Type: registry.FlagTypeNumber},
+			{Name: "id", Type: registry.FlagTypeInteger},
+			{Name: "ids", Type: registry.FlagTypeIntegerSlice},
+		},
+	}}})
+	if err != nil {
+		t.Fatalf("build registry: %v", err)
+	}
+	parsed, err := ParseInput(reg, &frameworkadapter.RawInput{Args: []string{
+		"run",
+		"--amount=1.2300",
+		"--id=123456789012345678901234567890",
+		"--ids=9007199254740993,9223372036854775808",
+		"--ids=3",
+	}})
+	if err != nil {
+		t.Fatalf("parse input: %v", err)
+	}
+	if got, want := parsed.Flags["amount"], json.Number("1.2300"); got != want {
+		t.Fatalf("amount = %#v (%T), want %#v", got, got, want)
+	}
+	if got, want := parsed.Flags["id"], json.Number("123456789012345678901234567890"); got != want {
+		t.Fatalf("id = %#v (%T), want %#v", got, got, want)
+	}
+	ids, ok := parsed.Flags["ids"].([]json.Number)
+	if !ok {
+		t.Fatalf("ids type = %T, want []json.Number", parsed.Flags["ids"])
+	}
+	for i, want := range []json.Number{"9007199254740993", "9223372036854775808", "3"} {
+		if got := ids[i]; got != want {
+			t.Fatalf("ids[%d] = %s, want %s", i, got, want)
+		}
+	}
+}
+
+func TestParseInputAcceptsSeparatedNegativeExactNumbers(t *testing.T) {
+	reg, err := registry.New(&registry.CommandTree{Nodes: []*registry.CommandNode{{
+		Name:       "run",
+		Help:       registry.HelpText{Brief: "Run"},
+		HandlerRef: "core.run",
+		Flags: []registry.FlagDef{
+			{Name: "amount", Short: "a", Type: registry.FlagTypeNumber},
+			{Name: "id", Short: "i", Type: registry.FlagTypeInteger},
+			{Name: "ids", Short: "s", Type: registry.FlagTypeIntegerSlice},
+		},
+	}}})
+	if err != nil {
+		t.Fatalf("build registry: %v", err)
+	}
+	parsed, err := ParseInput(reg, &frameworkadapter.RawInput{Args: []string{
+		"run", "--amount", "-1.2300", "-i", "-0", "--ids", "-1,-2", "-s", "-3",
+	}})
+	if err != nil {
+		t.Fatalf("parse input: %v", err)
+	}
+	if got, want := parsed.Flags["amount"], json.Number("-1.2300"); got != want {
+		t.Fatalf("amount = %#v, want %#v", got, want)
+	}
+	if got, want := parsed.Flags["id"], json.Number("-0"); got != want {
+		t.Fatalf("id = %#v, want %#v", got, want)
+	}
+	ids, ok := parsed.Flags["ids"].([]json.Number)
+	if !ok {
+		t.Fatalf("ids type = %T, want []json.Number", parsed.Flags["ids"])
+	}
+	for i, want := range []json.Number{"-1", "-2", "-3"} {
+		if got := ids[i]; got != want {
+			t.Fatalf("ids[%d] = %s, want %s", i, got, want)
+		}
+	}
+}
+
+func TestCommandRouterPreservesExactIntegerSliceDefault(t *testing.T) {
+	manager := registry.NewManager(registry.NewStaticSetup(&registry.CommandTree{Nodes: []*registry.CommandNode{{
+		Name:       "run",
+		Help:       registry.HelpText{Brief: "Run"},
+		HandlerRef: "core.run",
+		Flags: []registry.FlagDef{{
+			Name: "ids", Type: registry.FlagTypeIntegerSlice,
+			Default: []json.Number{"9007199254740993", "1e3"},
+		}},
+	}}}))
+	if err := manager.Init(context.Background()); err != nil {
+		t.Fatalf("init manager: %v", err)
+	}
+	r, err := NewCommandRouter(manager, "test")
+	if err != nil {
+		t.Fatalf("new router: %v", err)
+	}
+	parsed, err := r.Route(&frameworkadapter.RawInput{Context: context.Background(), Args: []string{"run"}})
+	if err != nil {
+		t.Fatalf("route: %v", err)
+	}
+	ids, ok := parsed.Flags["ids"].([]json.Number)
+	if !ok || len(ids) != 2 || ids[0] != "9007199254740993" || ids[1] != "1e3" {
+		t.Fatalf("ids = %#v (%T)", parsed.Flags["ids"], parsed.Flags["ids"])
+	}
+}
+
+func TestParseInputRejectsInvalidExactNumericFlags(t *testing.T) {
+	reg, err := registry.New(&registry.CommandTree{Nodes: []*registry.CommandNode{{
+		Name:       "run",
+		Help:       registry.HelpText{Brief: "Run"},
+		HandlerRef: "core.run",
+		Flags: []registry.FlagDef{
+			{Name: "amount", Type: registry.FlagTypeNumber},
+			{Name: "id", Type: registry.FlagTypeInteger},
+			{Name: "ids", Type: registry.FlagTypeIntegerSlice},
+		},
+	}}})
+	if err != nil {
+		t.Fatalf("build registry: %v", err)
+	}
+	for _, args := range [][]string{
+		{"run", "--amount=01"},
+		{"run", "--id=1.5"},
+		{"run", "--ids=1,two"},
+		{"run", "--amount", "-01"},
+		{"run", "--id", "-1.5"},
+		{"run", "--ids", "-1,two"},
+	} {
+		_, err := ParseInput(reg, &frameworkadapter.RawInput{Args: args})
+		assertCLIError(t, err, frameworkerrors.CodeParamInvalid)
 	}
 }
 

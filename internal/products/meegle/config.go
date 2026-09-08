@@ -12,6 +12,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/larksuite/meegle-cli/pkg/framework/jsonvalue"
 )
 
 type MeegleConfig struct {
@@ -120,7 +122,7 @@ func readRootConfig() (rootConfig, error) {
 		return rootConfig{}, nil
 	}
 	var root rootConfig
-	if err := json.Unmarshal(data, &root); err != nil {
+	if err := jsonvalue.Unmarshal(data, &root); err != nil {
 		return rootConfig{}, nil
 	}
 	return root, nil
@@ -293,7 +295,7 @@ func SetProfileValue(profile, key, value string) error {
 
 	// Try JSON.parse on the value first (like TS), fallback to string
 	var parsed any
-	if err := json.Unmarshal([]byte(value), &parsed); err != nil {
+	if err := jsonvalue.Unmarshal([]byte(value), &parsed); err != nil {
 		parsed = value
 	}
 	m[key] = parsed

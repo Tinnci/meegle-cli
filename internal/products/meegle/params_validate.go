@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/larksuite/meegle-cli/pkg/framework/jsonvalue"
 	"github.com/larksuite/meegle-cli/pkg/framework/pipeline"
 )
 
@@ -34,7 +35,7 @@ func findUnknownParams(state *pipeline.PipelineContext, snakeParams map[string]a
 	// Fixed params injected at registry level are also legitimate keys.
 	if rawFixed := state.Parsed.Node.Meta.Tags["mcp_fixed_params"]; rawFixed != "" {
 		var fixed map[string]any
-		if err := json.Unmarshal([]byte(rawFixed), &fixed); err == nil {
+		if err := jsonvalue.Unmarshal([]byte(rawFixed), &fixed); err == nil {
 			for k := range fixed {
 				valid[k] = struct{}{}
 			}

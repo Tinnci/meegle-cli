@@ -4,6 +4,7 @@
 package formatting
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -24,6 +25,13 @@ func TestRenderCell_Primitives(t *testing.T) {
 	}
 	if got := RenderCell(nil, 20); got != "" {
 		t.Fatalf("%q", got)
+	}
+}
+
+func TestRenderCell_JSONNumberIsNeverTruncated(t *testing.T) {
+	const raw = "123456789012345678901234567890"
+	if got := RenderCell(json.Number(raw), 10); got != raw {
+		t.Fatalf("RenderCell = %q, want exact number %q", got, raw)
 	}
 }
 

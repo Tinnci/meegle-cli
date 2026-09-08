@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"os"
 	"sort"
@@ -19,6 +20,7 @@ import (
 	"github.com/larksuite/meegle-cli/internal/products/meegle/mcpclient"
 	"github.com/larksuite/meegle-cli/internal/products/meegle/types"
 	"github.com/larksuite/meegle-cli/pkg/framework/executor"
+	"github.com/larksuite/meegle-cli/pkg/framework/jsonvalue"
 	frameworkoutput "github.com/larksuite/meegle-cli/pkg/framework/output"
 	"github.com/larksuite/meegle-cli/pkg/framework/pipeline"
 	"github.com/larksuite/meegle-cli/pkg/framework/router"
@@ -53,7 +55,10 @@ func (s *McpExecutorStep) Execute(ctx context.Context, state *pipeline.PipelineC
 		state.Values = pipeline.BuildInputValues(state.Parsed)
 	}
 
-	snakeParams := buildSnakeParams(state)
+	snakeParams, err := buildSnakeParams(state)
+	if err != nil {
+		return err
+	}
 
 	unknownParams := findUnknownParams(state, snakeParams)
 
@@ -257,9 +262,9 @@ func meegleOutputProcessor() *frameworkoutput.Processor {
 // performing kebab-to-snake conversion, type coercion, and mcp_fixed_params injection.
 // Extracted from McpExecutorStep so AutoPaginateStep can reuse the same logic
 // when constructing follow-up requests with page_token / page_num overrides.
-func buildSnakeParams(state *pipeline.PipelineContext) map[string]any {
+func buildSnakeParams(state *pipeline.PipelineContext) (map[string]any, error) {
 	if state == nil || state.Parsed == nil || state.Parsed.Node == nil {
-		return map[string]any{}
+		return map[string]any{}, nil
 	}
 	if state.Values == nil {
 		state.Values = pipeline.BuildInputValues(state.Parsed)
@@ -285,11 +290,15 @@ func buildSnakeParams(state *pipeline.PipelineContext) map[string]any {
 	}
 
 	snakeParams := make(map[string]any, len(state.Values))
-	for k, v := range state.Values {
+	for _, k := range sortedValueKeys(state.Values) {
+		v := state.Values[k]
 		if !explicitKeys[k] {
 			continue
 		}
 		origType := paramTypes[k]
+		if err := validateNumericParam(k, v, origType); err != nil {
+			return nil, err
+		}
 		snakeKey := strings.ReplaceAll(k, "-", "_")
 		snakeParams[snakeKey] = coerceValue(v, origType, paramItems[k])
 	}
@@ -297,7 +306,7 @@ func buildSnakeParams(state *pipeline.PipelineContext) map[string]any {
 	if state.Parsed.Node.Meta.Tags != nil {
 		if raw, ok := state.Parsed.Node.Meta.Tags["mcp_fixed_params"]; ok {
 			var fixed map[string]any
-			if json.Unmarshal([]byte(raw), &fixed) == nil {
+			if jsonvalue.Unmarshal([]byte(raw), &fixed) == nil {
 				for k, v := range fixed {
 					if _, exists := snakeParams[k]; !exists {
 						snakeParams[k] = v
@@ -307,7 +316,16 @@ func buildSnakeParams(state *pipeline.PipelineContext) map[string]any {
 		}
 	}
 
-	return snakeParams
+	return snakeParams, nil
+}
+
+func sortedValueKeys(values map[string]any) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // ---------------------------------------------------------------------------
@@ -363,7 +381,10 @@ func (s *AutoPaginateStep) Execute(ctx context.Context, state *pipeline.Pipeline
 	}
 
 	toolName := state.Parsed.Node.HandlerRef
-	originalParams := buildSnakeParams(state)
+	originalParams, err := buildSnakeParams(state)
+	if err != nil {
+		return err
+	}
 	client := newMcpClientFromState(state)
 
 	// Try page_token-based pagination first, then page_num-based.
@@ -527,9 +548,11 @@ func paginateByPageNum(ctx context.Context, client *mcpclient.Client, toolName s
 	// otherwise default to 1.
 	startPage := 1
 	if raw, exists := baseParams["page_num"]; exists {
-		if n, ok := toInt(raw); ok {
-			startPage = n
+		n, ok := toInt(raw)
+		if !ok || n < 1 {
+			return nil, nil, meerrors.NewClientError("CLIENT_INVALID_PARAM", "page_num must be a positive integer within the local int range")
 		}
+		startPage = n
 	}
 
 	transform := LookupResultTransform(parsed.FullPath)
@@ -555,7 +578,11 @@ func paginateByPageNum(ctx context.Context, client *mcpclient.Client, toolName s
 		if total > 0 && int64(getListLength(merged)) >= total {
 			break
 		}
-		currentPage++
+		nextPage, ok := incrementInt(currentPage)
+		if !ok {
+			return nil, nil, meerrors.NewClientError("CLIENT_INVALID_PARAM", "page_num cannot be incremented within the local int range")
+		}
+		currentPage = nextPage
 
 		params := withParam(baseParams, "page_num", currentPage)
 		resp, err := client.CallTool(ctx, toolName, params)
@@ -606,8 +633,8 @@ func paginateByPageNum(ctx context.Context, client *mcpclient.Client, toolName s
 	// Flatten: move total to top-level, remove pagination wrapper.
 	if pg, ok := merged["pagination"].(map[string]any); ok {
 		if _, exists := merged["total"]; !exists {
-			if t := toInt64(pg["total"]); t > 0 {
-				merged["total"] = t
+			if rawTotal, hasTotal := pg["total"]; hasTotal && isPositiveInteger(rawTotal) {
+				merged["total"] = rawTotal
 			}
 		}
 		delete(merged, "pagination")
@@ -620,10 +647,17 @@ func paginateByPageNum(ctx context.Context, client *mcpclient.Client, toolName s
 	}
 	if truncated {
 		meta["truncated"] = true
-		meta["next_page_num"] = currentPage + 1
-		fmt.Fprintf(os.Stderr,
-			"[meegle] auto-paginate reached %d-page limit; merged %v items across %d pages.\nRe-run with --page-num %d to continue.\n",
-			maxAutoPaginatePages, meta["total_items"], pageCount, currentPage+1)
+		if nextPage, ok := incrementInt(currentPage); ok {
+			meta["next_page_num"] = nextPage
+			fmt.Fprintf(os.Stderr,
+				"[meegle] auto-paginate reached %d-page limit; merged %v items across %d pages.\nRe-run with --page-num %d to continue.\n",
+				maxAutoPaginatePages, meta["total_items"], pageCount, nextPage)
+		} else {
+			meta["stopped_reason"] = "page_number_range_exhausted"
+			fmt.Fprintf(os.Stderr,
+				"[meegle] auto-paginate exhausted the local page-number range; merged %v items across %d pages.\n",
+				meta["total_items"], pageCount)
+		}
 	}
 	if stoppedReason != "" {
 		meta["stopped_reason"] = stoppedReason
@@ -716,27 +750,98 @@ func getString(m map[string]any, key string) string {
 func toInt(v any) (int, bool) {
 	switch n := v.(type) {
 	case float64:
-		return int(n), true
+		parsed, err := strconv.ParseInt(strconv.FormatFloat(n, 'f', -1, 64), 10, 64)
+		if err != nil {
+			return 0, false
+		}
+		return intFromInt64(parsed)
+	case json.Number:
+		parsed, ok := jsonNumberToInt64(n)
+		if !ok {
+			return 0, false
+		}
+		return intFromInt64(parsed)
 	case int:
 		return n, true
 	case int64:
-		return int(n), true
+		return intFromInt64(n)
 	default:
 		return 0, false
 	}
+}
+
+func jsonNumberToInt64(number json.Number) (int64, bool) {
+	value, err := jsonvalue.Int64(number)
+	return value, err == nil
+}
+
+func intFromInt64(value int64) (int, bool) {
+	converted := int(value)
+	return converted, int64(converted) == value
+}
+
+func maxIntValue() int {
+	return int(^uint(0) >> 1)
+}
+
+func incrementInt(value int) (int, bool) {
+	if value == maxIntValue() {
+		return 0, false
+	}
+	return value + 1, true
 }
 
 // toInt64 attempts to convert v to an int64.
 func toInt64(v any) int64 {
 	switch n := v.(type) {
 	case float64:
-		return int64(n)
+		parsed, err := strconv.ParseInt(strconv.FormatFloat(n, 'f', -1, 64), 10, 64)
+		if err != nil {
+			return 0
+		}
+		return parsed
+	case json.Number:
+		parsed, ok := jsonNumberToInt64(n)
+		if !ok {
+			return 0
+		}
+		return parsed
 	case int:
 		return int64(n)
 	case int64:
 		return n
 	default:
 		return 0
+	}
+}
+
+// isPositiveInteger reports whether v is a positive integral JSON value
+// without narrowing it to int64. This keeps pagination totals exact even when
+// they exceed the local integer range.
+func isPositiveInteger(v any) bool {
+	switch n := v.(type) {
+	case json.Number:
+		if !jsonvalue.IsInteger(n) || strings.HasPrefix(n.String(), "-") {
+			return false
+		}
+		mantissa := n.String()
+		if index := strings.IndexAny(mantissa, "eE"); index >= 0 {
+			mantissa = mantissa[:index]
+		}
+		for _, digit := range mantissa {
+			if digit >= '1' && digit <= '9' {
+				return true
+			}
+		}
+		return false
+	case float64:
+		return n > 0 && n == math.Trunc(n)
+	case int:
+		return n > 0
+	case int64:
+		return n > 0
+	default:
+		return false
 	}
 }
 
@@ -912,12 +1017,126 @@ func sanitizeToolNames(msg string, commands []types.MappedCommand) string {
 // coerceValue — Converts parameter values based on the original MCP type
 // ---------------------------------------------------------------------------
 
+func validateNumericParam(name string, value any, mcpType string) error {
+	if mcpType != "number" && mcpType != "integer" {
+		return nil
+	}
+
+	number, ok := exactJSONNumber(value)
+	if !ok || mcpType == "integer" && !jsonvalue.IsInteger(number) {
+		return meerrors.NewClientError(
+			"CLIENT_INVALID_PARAM",
+			fmt.Sprintf(
+				"parameter %q must be a valid JSON %s, got %s",
+				strings.ReplaceAll(name, "-", "_"),
+				mcpType,
+				describeNumericParamValue(value),
+			),
+		)
+	}
+	return nil
+}
+
+func describeNumericParamValue(value any) string {
+	switch typed := value.(type) {
+	case nil:
+		return "null"
+	case string:
+		return strconv.Quote(truncateErrorValue(typed))
+	case json.Number:
+		if number, err := jsonvalue.ParseNumber(typed.String()); err == nil {
+			return truncateErrorValue(number.String())
+		}
+		return strconv.Quote(truncateErrorValue(typed.String()))
+	case bool:
+		return strconv.FormatBool(typed)
+	case float64:
+		return strconv.FormatFloat(typed, 'g', -1, 64)
+	case float32:
+		return strconv.FormatFloat(float64(typed), 'g', -1, 32)
+	case int:
+		return strconv.Itoa(typed)
+	case int32:
+		return strconv.FormatInt(int64(typed), 10)
+	case int64:
+		return strconv.FormatInt(typed, 10)
+	case uint:
+		return strconv.FormatUint(uint64(typed), 10)
+	case uint32:
+		return strconv.FormatUint(uint64(typed), 10)
+	case uint64:
+		return strconv.FormatUint(typed, 10)
+	case []any:
+		return fmt.Sprintf("array (%d %s)", len(typed), pluralize(len(typed), "item", "items"))
+	case map[string]any:
+		return fmt.Sprintf("object (%d %s)", len(typed), pluralize(len(typed), "key", "keys"))
+	default:
+		return fmt.Sprintf("value of type %T", value)
+	}
+}
+
+func truncateErrorValue(value string) string {
+	const maxRunes = 64
+	runeCount := 0
+	for byteIndex := range value {
+		if runeCount == maxRunes {
+			return value[:byteIndex] + "…"
+		}
+		runeCount++
+	}
+	return value
+}
+
+func pluralize(count int, singular, plural string) string {
+	if count == 1 {
+		return singular
+	}
+	return plural
+}
+
+func exactJSONNumber(value any) (json.Number, bool) {
+	var raw string
+	switch number := value.(type) {
+	case json.Number:
+		raw = number.String()
+	case string:
+		raw = number
+	case float64:
+		raw = strconv.FormatFloat(number, 'g', -1, 64)
+	case float32:
+		raw = strconv.FormatFloat(float64(number), 'g', -1, 32)
+	case int:
+		raw = strconv.Itoa(number)
+	case int64:
+		raw = strconv.FormatInt(number, 10)
+	case int32:
+		raw = strconv.FormatInt(int64(number), 10)
+	case uint:
+		raw = strconv.FormatUint(uint64(number), 10)
+	case uint64:
+		raw = strconv.FormatUint(number, 10)
+	case uint32:
+		raw = strconv.FormatUint(uint64(number), 10)
+	default:
+		return "", false
+	}
+	parsed, err := jsonvalue.ParseNumber(raw)
+	return parsed, err == nil
+}
+
 // coerceValue converts string values collected by the framework to the correct type based on the original MCP type.
 func coerceValue(v any, mcpType string, itemsType string) any {
 	switch mcpType {
 	case "number":
 		if s, ok := v.(string); ok && s != "" {
-			if n, err := strconv.ParseFloat(s, 64); err == nil {
+			if n, err := jsonvalue.ParseNumber(s); err == nil {
+				return n
+			}
+		}
+		return v
+	case "integer":
+		if s, ok := v.(string); ok && s != "" {
+			if n, err := jsonvalue.ParseNumber(s); err == nil && isIntegralJSONNumber(n) {
 				return n
 			}
 		}
@@ -935,7 +1154,7 @@ func coerceValue(v any, mcpType string, itemsType string) any {
 			trimmed := strings.TrimSpace(s)
 			if len(trimmed) > 0 && (trimmed[0] == '{' || trimmed[0] == '[') {
 				var parsed any
-				if err := json.Unmarshal([]byte(trimmed), &parsed); err == nil {
+				if err := jsonvalue.Unmarshal([]byte(trimmed), &parsed); err == nil {
 					return parsed
 				}
 			}
@@ -946,6 +1165,10 @@ func coerceValue(v any, mcpType string, itemsType string) any {
 	}
 }
 
+func isIntegralJSONNumber(number json.Number) bool {
+	return jsonvalue.IsInteger(number)
+}
+
 // coerceArray implements array parsing logic equivalent to master's splitAndCoerce.
 // Input may be []string (cobra StringArray/StringSlice) or string (single value).
 //
@@ -954,21 +1177,20 @@ func coerceValue(v any, mcpType string, itemsType string) any {
 // is returned unwrapped, and a single JSON-object value is wrapped into a
 // one-element array so object-item schemas always receive an array.
 func coerceArray(v any, itemsType string) any {
-	numericItems := itemsType == "number"
+	numericItems := itemsType == "number" || itemsType == "integer"
 
 	switch val := v.(type) {
 	case []string:
 		if len(val) == 1 {
-			return coerceArraySingleValue(val[0], numericItems)
+			return coerceArraySingleValue(val[0], itemsType)
 		}
 		// Multiple values: parse each element. If an element is JSON (object
 		// or array), decode it; otherwise keep the raw string.
 		if numericItems {
-			nums := make([]float64, 0, len(val))
+			nums := make([]json.Number, 0, len(val))
 			allNums := true
 			for _, s := range val {
-				var n float64
-				if _, err := fmt.Sscanf(strings.TrimSpace(s), "%f", &n); err == nil {
+				if n, err := parseArrayNumber(strings.TrimSpace(s), itemsType); err == nil {
 					nums = append(nums, n)
 				} else {
 					allNums = false
@@ -985,7 +1207,7 @@ func coerceArray(v any, itemsType string) any {
 		}
 		return result
 	case string:
-		return coerceArraySingleValue(val, numericItems)
+		return coerceArraySingleValue(val, itemsType)
 	default:
 		return v
 	}
@@ -997,7 +1219,7 @@ func decodeArrayElement(s string) any {
 	trimmed := strings.TrimSpace(s)
 	if len(trimmed) > 0 && (trimmed[0] == '[' || trimmed[0] == '{') {
 		var parsed any
-		if err := json.Unmarshal([]byte(trimmed), &parsed); err == nil {
+		if err := jsonvalue.Unmarshal([]byte(trimmed), &parsed); err == nil {
 			return parsed
 		}
 	}
@@ -1007,12 +1229,12 @@ func decodeArrayElement(s string) any {
 // coerceArraySingleValue handles array parsing for a single string value.
 // A JSON-object value is wrapped into a one-element array so object-shaped
 // items (e.g. fields[]) can be passed via a single `--flag '{...}'` form.
-func coerceArraySingleValue(val string, numericItems bool) any {
+func coerceArraySingleValue(val string, itemsType string) any {
 	trimmed := strings.TrimSpace(val)
 	// Starts with [ or { -> try JSON parsing
 	if len(trimmed) > 0 && (trimmed[0] == '[' || trimmed[0] == '{') {
 		var parsed any
-		if err := json.Unmarshal([]byte(trimmed), &parsed); err == nil {
+		if err := jsonvalue.Unmarshal([]byte(trimmed), &parsed); err == nil {
 			if _, isArray := parsed.([]any); !isArray {
 				return []any{parsed}
 			}
@@ -1020,23 +1242,23 @@ func coerceArraySingleValue(val string, numericItems bool) any {
 		}
 	}
 	// Comma split + optional number coerce
-	return splitAndCoerce(val, numericItems)
+	return splitAndCoerce(val, itemsType)
 }
 
-// splitAndCoerce splits a comma-delimited string into an array, optionally coercing elements to float64.
+// splitAndCoerce splits a comma-delimited string into an array, optionally
+// coercing elements to lossless JSON numbers.
 // Ported from master internal/cli/dynamic.go.
-func splitAndCoerce(val string, numeric bool) any {
+func splitAndCoerce(val string, itemsType string) any {
 	parts := strings.Split(val, ",")
 	trimmed := make([]string, len(parts))
 	for i, p := range parts {
 		trimmed[i] = strings.TrimSpace(p)
 	}
-	if numeric {
-		nums := make([]float64, 0, len(trimmed))
+	if itemsType == "number" || itemsType == "integer" {
+		nums := make([]json.Number, 0, len(trimmed))
 		allNums := true
 		for _, s := range trimmed {
-			var n float64
-			if _, err := fmt.Sscanf(s, "%f", &n); err == nil {
+			if n, err := parseArrayNumber(s, itemsType); err == nil {
 				nums = append(nums, n)
 			} else {
 				allNums = false
@@ -1052,4 +1274,15 @@ func splitAndCoerce(val string, numeric bool) any {
 		result[i] = s
 	}
 	return result
+}
+
+func parseArrayNumber(raw, itemsType string) (json.Number, error) {
+	number, err := jsonvalue.ParseNumber(raw)
+	if err != nil {
+		return "", err
+	}
+	if itemsType == "integer" && !isIntegralJSONNumber(number) {
+		return "", fmt.Errorf("expected integer")
+	}
+	return number, nil
 }

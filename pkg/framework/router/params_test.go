@@ -4,12 +4,14 @@
 package router
 
 import (
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	frameworkerrors "github.com/larksuite/meegle-cli/pkg/framework/errors"
+	"github.com/larksuite/meegle-cli/pkg/framework/output/encoders"
 
 	"os"
 )
@@ -21,7 +23,7 @@ func TestMergeStructuredParamsInlineJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("merge: %v", err)
 	}
-	if got, want := merged["a"], float64(1); got != want {
+	if got, want := merged["a"], json.Number("1"); got != want {
 		t.Fatalf("a = %v, want %v", got, want)
 	}
 	if got, want := merged["b"], "x"; got != want {
@@ -35,7 +37,7 @@ func TestMergeStructuredParamsInlineJSON(t *testing.T) {
 func TestMergeStructuredParamsFileSyntaxRelative(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "body.json")
-	if err := os.WriteFile(path, []byte(`{"fields":[{"field_key":"name","field_value":"hello"}]}`), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"id":9007199254740993,"fields":[{"field_key":"name","field_value":"hello"}]}`), 0o600); err != nil {
 		t.Fatalf("write tmp: %v", err)
 	}
 	flags := map[string]any{"params": "@" + path}
@@ -47,6 +49,9 @@ func TestMergeStructuredParamsFileSyntaxRelative(t *testing.T) {
 	fields, ok := merged["fields"].([]any)
 	if !ok || len(fields) != 1 {
 		t.Fatalf("fields = %#v", merged["fields"])
+	}
+	if got, want := merged["id"], json.Number("9007199254740993"); got != want {
+		t.Fatalf("id = %#v (%T), want %#v", got, got, want)
 	}
 }
 
@@ -126,6 +131,29 @@ func TestMergeStructuredParamsFileWithInvalidJSON(t *testing.T) {
 	}
 }
 
+func TestMergeStructuredParamsEmptyFileReportsInvalidJSON(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "empty.json")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatalf("write tmp: %v", err)
+	}
+
+	_, err := MergeStructuredParams(map[string]any{"params": "@" + path}, map[string]any{})
+	if err == nil {
+		t.Fatal("expected error for empty JSON file")
+	}
+	var cliErr *frameworkerrors.CLIError
+	if !errors.As(err, &cliErr) {
+		t.Fatalf("expected CLIError, got %T", err)
+	}
+	if cliErr.Code != frameworkerrors.CodeInvalidParams {
+		t.Fatalf("code = %s, want %s", cliErr.Code, frameworkerrors.CodeInvalidParams)
+	}
+	if !strings.Contains(cliErr.Message, "unexpected end of JSON input") {
+		t.Fatalf("message = %q, want stable empty JSON error", cliErr.Message)
+	}
+}
+
 func TestMergeStructuredParamsFileMergesWithSet(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "body.json")
@@ -141,14 +169,61 @@ func TestMergeStructuredParamsFileMergesWithSet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("merge: %v", err)
 	}
-	if got := merged["a"]; got != float64(1) {
+	if got := merged["a"]; got != json.Number("1") {
 		t.Fatalf("a = %v", got)
 	}
-	if got := merged["b"]; got != int64(2) {
+	if got := merged["b"]; got != json.Number("2") {
 		t.Fatalf("b = %v", got)
 	}
 	nested, ok := merged["c"].(map[string]any)
-	if !ok || nested["d"] != int64(3) {
+	if !ok || nested["d"] != json.Number("3") {
 		t.Fatalf("c.d = %#v", merged["c"])
+	}
+}
+
+func TestMergeStructuredParamsSetPreservesAnyValidJSONNumber(t *testing.T) {
+	flags := map[string]any{
+		"set": []string{
+			"large=123456789012345678901234567890",
+			"decimal=1.2300",
+			"exponent=1e+30",
+			"leading_zero=01",
+		},
+	}
+	merged, err := MergeStructuredParams(flags, map[string]any{})
+	if err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+
+	wants := map[string]any{
+		"large":        json.Number("123456789012345678901234567890"),
+		"decimal":      json.Number("1.2300"),
+		"exponent":     json.Number("1e+30"),
+		"leading_zero": "01",
+	}
+	for key, want := range wants {
+		if got := merged[key]; got != want {
+			t.Errorf("%s = %#v (%T), want %#v", key, got, got, want)
+		}
+	}
+}
+
+func TestMergeStructuredParamsRoundTripsEncodedJSONNumbers(t *testing.T) {
+	encoded, err := encoders.EncodeJSON(map[string]any{
+		"id":      json.Number("123456789012345678901234567890"),
+		"decimal": json.Number("1.2300"),
+	})
+	if err != nil {
+		t.Fatalf("EncodeJSON: %v", err)
+	}
+	merged, err := MergeStructuredParams(map[string]any{"params": string(encoded)}, map[string]any{})
+	if err != nil {
+		t.Fatalf("MergeStructuredParams: %v", err)
+	}
+	if got, want := merged["id"], json.Number("123456789012345678901234567890"); got != want {
+		t.Fatalf("id = %#v (%T), want %#v", got, got, want)
+	}
+	if got, want := merged["decimal"], json.Number("1.2300"); got != want {
+		t.Fatalf("decimal = %#v (%T), want %#v", got, got, want)
 	}
 }

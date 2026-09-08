@@ -6,15 +6,18 @@ package registry
 import "strings"
 
 const (
-	FlagTypeString      = "string"
-	FlagTypeInt         = "int"
-	FlagTypeFloat       = "float"
-	FlagTypeBool        = "bool"
-	FlagTypeStringSlice = "string-slice"
-	FlagTypeStringArray = "string-array"
-	FlagTypeIntSlice    = "int-slice"
-	FlagTypeObject      = "object"
-	FlagTypeObjectSlice = "object-slice"
+	FlagTypeString       = "string"
+	FlagTypeInt          = "int"
+	FlagTypeFloat        = "float"
+	FlagTypeInteger      = "integer"
+	FlagTypeNumber       = "number"
+	FlagTypeBool         = "bool"
+	FlagTypeStringSlice  = "string-slice"
+	FlagTypeStringArray  = "string-array"
+	FlagTypeIntSlice     = "int-slice"
+	FlagTypeIntegerSlice = "integer-slice"
+	FlagTypeObject       = "object"
+	FlagTypeObjectSlice  = "object-slice"
 )
 
 type CommandTree struct {

@@ -8,6 +8,17 @@ versioned section on each npm release.
 
 ## [Unreleased]
 
+## [v1.0.23] - 2026-09-08
+
+### Changed
+
+- Numeric `--set` inference, schema-declared scalar numeric parameters from named flags, `--params`, or `--set`, and batch numeric IDs now follow JSON number syntax. Non-JSON spellings such as `+1` and `01` remain strings for `--set`; non-numeric values are rejected before transport where a typed scalar number or integer is required, including batch shared parameters.
+
+### Fixed
+
+- Preserve the exact type and lexical form of JSON numbers across CLI and SDK inputs, MCP/HTTP/local responses, JSON/NDJSON/table output, batch IDs, fixed parameters, and output-to-input reuse. Values beyond JavaScript's safe-integer range or Go's `int64` range, high-precision decimals, and exponent notation no longer pass through `float64`; only explicit local control values such as pagination indexes are range-checked.
+- Report the lexicographically first invalid schema-declared numeric parameter consistently when `--params` or `--set` supplies multiple invalid values, for both single and batch commands.
+
 ## [v1.0.22] - 2026-08-27
 
 ### Fixed

@@ -4,6 +4,7 @@
 package meegle
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -148,16 +149,15 @@ func TestSetProfileValueArbitraryKey(t *testing.T) {
 func TestSetProfileValueJSONParse(t *testing.T) {
 	setupTestDir(t)
 	SaveProfileConfig("test", MeegleConfig{Host: "meegle.com"})
-	if err := SetProfileValue("test", "count", "42"); err != nil {
+	if err := SetProfileValue("test", "count", "123456789012345678901234567890"); err != nil {
 		t.Fatalf("set failed: %v", err)
 	}
 	val, err := GetProfileValue("test", "count")
 	if err != nil {
 		t.Fatalf("get failed: %v", err)
 	}
-	// JSON.parse("42") returns float64 in Go
-	if val != float64(42) {
-		t.Errorf("expected 42 (float64), got %v (%T)", val, val)
+	if val != json.Number("123456789012345678901234567890") {
+		t.Errorf("expected exact json.Number, got %v (%T)", val, val)
 	}
 }
 

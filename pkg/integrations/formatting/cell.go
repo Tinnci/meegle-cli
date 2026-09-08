@@ -14,7 +14,8 @@ import (
 //
 // Rules (matching the design spec §格式行为规约 > table):
 //   - nil → ""
-//   - string/number/bool → Sprint, truncated by maxWidth
+//   - string/float/bool → Sprint, truncated by maxWidth
+//   - json.Number → exact numeric lexeme, never truncated
 //   - primitive-only arrays → comma-joined, truncated
 //   - objects and mixed/object arrays → compact JSON, bracket-balanced truncation
 //
@@ -29,7 +30,7 @@ func RenderCell(v any, maxWidth int) string {
 	case bool:
 		return strconvBool(typed)
 	case json.Number:
-		return maybeTruncatePlain(typed.String(), maxWidth)
+		return typed.String()
 	case float64:
 		return maybeTruncatePlain(formatFloat(typed), maxWidth)
 	case float32:

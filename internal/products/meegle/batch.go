@@ -8,8 +8,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 
@@ -17,6 +17,7 @@ import (
 	"github.com/larksuite/meegle-cli/internal/products/meegle/mcpclient"
 	"github.com/larksuite/meegle-cli/internal/products/meegle/types"
 	"github.com/larksuite/meegle-cli/pkg/framework/executor"
+	"github.com/larksuite/meegle-cli/pkg/framework/jsonvalue"
 	"github.com/larksuite/meegle-cli/pkg/framework/pipeline"
 	"github.com/larksuite/meegle-cli/pkg/framework/registry"
 )
@@ -270,12 +271,15 @@ func (s *BatchExecutorStep) Execute(ctx context.Context, state *pipeline.Pipelin
 		return err
 	}
 
-	shared := batchSharedParams(state)
+	shared, err := batchSharedParams(state)
+	if err != nil {
+		return err
+	}
 	// Look up the per-item MCP type (e.g. "string" / "number") from the
 	// inherited mcp_param_types tag so fan-out sends the per-item value the
 	// same way the single-command path would — the exact contract tested
 	// against the real MCP server. Without this, the batch would send a
-	// raw int64 while the server expects e.g. a string and rejects it.
+	// raw numeric value while the server expects e.g. a string and rejects it.
 	perItemType, perItemItems := perItemCoercionTypes(state.Parsed.Node, perItemParam)
 
 	client := s.resolveClient(state)
@@ -315,7 +319,7 @@ func (s *BatchExecutorStep) Execute(ctx context.Context, state *pipeline.Pipelin
 				// Run the per-item value through coerceValue so it matches
 				// the wire shape the single-command path uses (string vs
 				// number etc. — determined by the MCP schema).
-				params[perItemParam] = coerceValue(strconv.FormatInt(ids[idx], 10), perItemType, perItemItems)
+				params[perItemParam] = coerceValue(ids[idx].String(), perItemType, perItemItems)
 				resp, callErr := client.CallTool(fanCtx, toolName, params)
 				if callErr != nil {
 					if meerrors.IsUnauthorized(callErr) {
@@ -395,7 +399,7 @@ func (a mcpClientAdapter) CallTool(ctx context.Context, name string, params map[
 
 // batchItem is the intermediate per-id result held during fan-out.
 type batchItem struct {
-	ID   int64
+	ID   json.Number
 	Data any
 	Err  error
 }
@@ -523,11 +527,11 @@ func toMapSlice(v any) []map[string]any {
 // McpExecutorStep.Execute does: iterates state.Values, sends only flags the
 // user explicitly set, skips the CLI-only IDs flags, and coerces values
 // using the sibling's inherited mcp_param_types / mcp_param_items tags.
-func batchSharedParams(state *pipeline.PipelineContext) map[string]any {
+func batchSharedParams(state *pipeline.PipelineContext) (map[string]any, error) {
 	params := map[string]any{}
 	bc := batchCommandForNode(state.Parsed.Node)
 	if bc == nil {
-		return params
+		return params, nil
 	}
 	if state.Values == nil {
 		state.Values = pipeline.BuildInputValues(state.Parsed)
@@ -561,9 +565,13 @@ func batchSharedParams(state *pipeline.PipelineContext) map[string]any {
 		explicit[k] = true
 	}
 
-	for k, v := range state.Values {
+	for _, k := range sortedValueKeys(state.Values) {
+		v := state.Values[k]
 		if !explicit[k] || skip[k] {
 			continue
+		}
+		if err := validateNumericParam(k, v, paramTypes[k]); err != nil {
+			return nil, err
 		}
 		snakeKey := strings.ReplaceAll(k, "-", "_")
 		params[snakeKey] = coerceValue(v, paramTypes[k], paramItems[k])
@@ -575,7 +583,7 @@ func batchSharedParams(state *pipeline.PipelineContext) map[string]any {
 	if tags := state.Parsed.Node.Meta.Tags; tags != nil {
 		if raw, ok := tags["mcp_fixed_params"]; ok {
 			var fixed map[string]any
-			if json.Unmarshal([]byte(raw), &fixed) == nil {
+			if jsonvalue.Unmarshal([]byte(raw), &fixed) == nil {
 				for k, v := range fixed {
 					if _, exists := params[k]; !exists {
 						params[k] = v
@@ -584,7 +592,7 @@ func batchSharedParams(state *pipeline.PipelineContext) map[string]any {
 			}
 		}
 	}
-	return params
+	return params, nil
 }
 
 // batchCommandForNode resolves a CommandNode back to its static batchCommand
@@ -608,7 +616,7 @@ func batchCommandForNode(node *registry.CommandNode) *batchCommand {
 // collectBatchIDs gathers, validates, and deduplicates IDs from the batch
 // IDs flag and the optional file flag. Client errors describe exactly which
 // constraint failed (missing, non-numeric, over the cap).
-func collectBatchIDs(state *pipeline.PipelineContext) ([]int64, error) {
+func collectBatchIDs(state *pipeline.PipelineContext) ([]json.Number, error) {
 	bc := batchCommandForNode(state.Parsed.Node)
 	if bc == nil {
 		return nil, meerrors.NewClientError("CLIENT_MISCONFIGURED",
@@ -631,22 +639,23 @@ func collectBatchIDs(state *pipeline.PipelineContext) ([]int64, error) {
 		return nil, missingIDsError(bc)
 	}
 
-	seen := make(map[int64]struct{}, len(raw))
-	ids := make([]int64, 0, len(raw))
+	seen := make(map[string]struct{}, len(raw))
+	ids := make([]json.Number, 0, len(raw))
 	for _, s := range raw {
 		s = strings.TrimSpace(s)
 		if s == "" {
 			continue
 		}
-		n, err := strconv.ParseInt(s, 10, 64)
-		if err != nil {
+		n, err := jsonvalue.ParseNumber(s)
+		if err != nil || !jsonvalue.IsInteger(n) {
 			return nil, meerrors.NewClientError("CLIENT_INVALID_PARAM",
 				fmt.Sprintf("invalid --%s value %q: must be an integer", bc.IDsFlag, s))
 		}
-		if _, dup := seen[n]; dup {
+		canonical := canonicalIntegerKey(n)
+		if _, dup := seen[canonical]; dup {
 			continue
 		}
-		seen[n] = struct{}{}
+		seen[canonical] = struct{}{}
 		ids = append(ids, n)
 	}
 	if len(ids) == 0 {
@@ -658,6 +667,40 @@ func collectBatchIDs(state *pipeline.PipelineContext) ([]int64, error) {
 			WithSuggestion("split the input or use `search` for broader queries")
 	}
 	return ids, nil
+}
+
+// canonicalIntegerKey represents an integral JSON number without expanding
+// large exponents. Equivalent spellings such as 1000, 1e3, and 1000.0 share
+// one key while the original json.Number remains untouched for transport.
+func canonicalIntegerKey(number json.Number) string {
+	raw := number.String()
+	negative := strings.HasPrefix(raw, "-")
+	unsigned := strings.TrimPrefix(raw, "-")
+	mantissa, exponentText, hasExponent := strings.Cut(unsigned, "e")
+	if !hasExponent {
+		mantissa, exponentText, hasExponent = strings.Cut(unsigned, "E")
+	}
+	_, fraction, hasFraction := strings.Cut(mantissa, ".")
+	digits := strings.Replace(mantissa, ".", "", 1)
+	digits = strings.TrimLeft(digits, "0")
+	if digits == "" {
+		return "0"
+	}
+	trailingZeros := len(digits) - len(strings.TrimRight(digits, "0"))
+	coefficient := strings.TrimRight(digits, "0")
+	exponent := new(big.Int)
+	if hasExponent {
+		exponent.SetString(exponentText, 10)
+	}
+	fractionDigits := 0
+	if hasFraction {
+		fractionDigits = len(fraction)
+	}
+	exponent.Add(exponent, big.NewInt(int64(trailingZeros-fractionDigits)))
+	if negative {
+		coefficient = "-" + coefficient
+	}
+	return coefficient + "e" + exponent.String()
 }
 
 func missingIDsError(bc *batchCommand) *meerrors.MeegleError {

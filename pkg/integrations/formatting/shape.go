@@ -3,7 +3,11 @@
 
 package formatting
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"github.com/larksuite/meegle-cli/pkg/framework/jsonvalue"
+)
 
 // DataShape classifies an arbitrary payload for table rendering.
 type DataShape int
@@ -65,7 +69,7 @@ func Normalize(data any) any {
 	case json.RawMessage:
 		if json.Valid(v) {
 			var decoded any
-			if json.Unmarshal(v, &decoded) == nil {
+			if jsonvalue.Unmarshal(v, &decoded) == nil {
 				return decoded
 			}
 		}
@@ -73,7 +77,7 @@ func Normalize(data any) any {
 	case []byte:
 		if json.Valid(v) {
 			var decoded any
-			if json.Unmarshal(v, &decoded) == nil {
+			if jsonvalue.Unmarshal(v, &decoded) == nil {
 				return decoded
 			}
 		}
