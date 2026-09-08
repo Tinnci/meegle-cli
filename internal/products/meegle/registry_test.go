@@ -164,6 +164,7 @@ func TestBuildCommandTree_MapsParameterTypes(t *testing.T) {
 			Parameters: []types.ToolParameter{
 				{Name: "str_param", Type: "string", Description: "a string", Required: true},
 				{Name: "num_param", Type: "number", Description: "a number"},
+				{Name: "int_param", Type: "integer", Description: "an integer"},
 				{Name: "bool_param", Type: "boolean", Description: "a bool"},
 				{Name: "arr_param", Type: "array", Description: "an array"},
 				{Name: "obj_param", Type: "object", Description: "an object"},
@@ -184,14 +185,15 @@ func TestBuildCommandTree_MapsParameterTypes(t *testing.T) {
 		t.Fatal("missing workitem group")
 	}
 	leaf := workitem.Children[0]
-	// url should be skipped → 5 flags
-	if len(leaf.Flags) != 5 {
-		t.Fatalf("expected 5 flags (url skipped), got %d", len(leaf.Flags))
+	// url should be skipped → 6 flags
+	if len(leaf.Flags) != 6 {
+		t.Fatalf("expected 6 flags (url skipped), got %d", len(leaf.Flags))
 	}
 
 	expected := map[string]string{
 		"str-param":  registry.FlagTypeString,
-		"num-param":  registry.FlagTypeString,
+		"num-param":  registry.FlagTypeNumber,
+		"int-param":  registry.FlagTypeInteger,
 		"bool-param": registry.FlagTypeBool,
 		"arr-param":  registry.FlagTypeStringArray,
 		"obj-param":  registry.FlagTypeString,

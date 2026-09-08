@@ -23,6 +23,23 @@ func TestEncodeJSON_Map(t *testing.T) {
 	}
 }
 
+func TestEncodeJSONPreservesJSONNumberLexemes(t *testing.T) {
+	data := map[string]any{
+		"large":    json.Number("9007199254740993"),
+		"decimal":  json.Number("1.2300"),
+		"exponent": json.Number("1e+30"),
+	}
+	out, err := EncodeJSON(data)
+	if err != nil {
+		t.Fatalf("EncodeJSON: %v", err)
+	}
+	for _, lexeme := range []string{"9007199254740993", "1.2300", "1e+30"} {
+		if !strings.Contains(string(out), lexeme) {
+			t.Errorf("output %q does not contain exact number %q", out, lexeme)
+		}
+	}
+}
+
 func TestEncodeJSON_RawMessagePassThrough(t *testing.T) {
 	raw := json.RawMessage(`{"a":1}`)
 	out, err := EncodeJSON(raw)

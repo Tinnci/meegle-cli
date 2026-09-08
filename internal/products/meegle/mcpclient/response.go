@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	meerrors "github.com/larksuite/meegle-cli/internal/products/meegle/errors"
+	"github.com/larksuite/meegle-cli/pkg/framework/jsonvalue"
 )
 
 // logIDPrefixes is the set of prefixes the MCP server has historically used
@@ -91,7 +92,7 @@ func unwrapResponse(raw json.RawMessage) (*Response, error) {
 
 	text := dataTexts[0]
 	var parsed any
-	if err := json.Unmarshal([]byte(text), &parsed); err == nil {
+	if err := jsonvalue.Unmarshal([]byte(text), &parsed); err == nil {
 		result.Data = parsed
 	} else {
 		result.Data = text

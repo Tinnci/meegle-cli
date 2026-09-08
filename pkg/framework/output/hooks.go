@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"strconv"
 	"strings"
+
+	"github.com/larksuite/meegle-cli/pkg/framework/jsonvalue"
 )
 
 type FieldSelectorHook struct{}
@@ -157,13 +159,13 @@ func normalizeProjectionInput(value any) any {
 		return typed
 	case json.RawMessage:
 		var decoded any
-		if json.Valid(typed) && json.Unmarshal(typed, &decoded) == nil {
+		if json.Valid(typed) && jsonvalue.Unmarshal(typed, &decoded) == nil {
 			return decoded
 		}
 		return value
 	case []byte:
 		var decoded any
-		if json.Valid(typed) && json.Unmarshal(typed, &decoded) == nil {
+		if json.Valid(typed) && jsonvalue.Unmarshal(typed, &decoded) == nil {
 			return decoded
 		}
 		return value
@@ -173,7 +175,7 @@ func normalizeProjectionInput(value any) any {
 			return value
 		}
 		var decoded any
-		if err := json.Unmarshal(encoded, &decoded); err != nil {
+		if err := jsonvalue.Unmarshal(encoded, &decoded); err != nil {
 			return value
 		}
 		return decoded

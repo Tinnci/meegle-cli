@@ -4,13 +4,13 @@
 package router
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
 
 	frameworkerrors "github.com/larksuite/meegle-cli/pkg/framework/errors"
+	"github.com/larksuite/meegle-cli/pkg/framework/jsonvalue"
 )
 
 // MergeStructuredParams folds --params (JSON) and --set (key=value) into the
@@ -36,7 +36,7 @@ func MergeStructuredParams(flags map[string]any, explicit map[string]any) (map[s
 		if err != nil {
 			return nil, err
 		}
-		if err := json.Unmarshal(payload, &merged); err != nil {
+		if err := jsonvalue.Unmarshal(payload, &merged); err != nil {
 			return nil, frameworkerrors.New(frameworkerrors.CategoryUser, frameworkerrors.CodeInvalidParams, fmt.Sprintf("--params is not valid JSON: %v", err))
 		}
 	}
@@ -106,10 +106,7 @@ func setNestedField(target map[string]any, path []string, value any) {
 }
 
 func inferType(value string) any {
-	if parsed, err := strconv.ParseInt(value, 10, 64); err == nil {
-		return parsed
-	}
-	if parsed, err := strconv.ParseFloat(value, 64); err == nil {
+	if parsed, err := jsonvalue.ParseNumber(value); err == nil {
 		return parsed
 	}
 	if parsed, err := strconv.ParseBool(value); err == nil {

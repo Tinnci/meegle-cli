@@ -39,6 +39,8 @@
 
 > 默认只查询在职用户。只有当用户明确要求包含离职、停用等非在职人员，或在职结果为空且用户要求继续查找时，才给 `user search` 传 `--need-all-status=true`。
 
+**附件字段门禁**：只要用户要求上传附件，就必须额外调用 `workitem meta-fields`，实时查询当前空间和类型下全部 `file` 和 `multi-file` 字段。用户指定字段名或 key 时做精确匹配；用户只说“附件”且出现多个候选时，列出字段名、key、类型并让用户选择。禁止默认取第一个，禁止复用历史会话里的附件字段，禁止把 `attachment` 或 `multi_attachment` 写死。确定目标后，上传、创建和回读都必须使用同一个字段 key。完整协议见 [attachment.md](attachment.md)。
+
 ### STEP 4 — 自动匹配模板
 
 根据 STEP 3 获取的模板枚举值：
@@ -75,7 +77,8 @@
 | `role_owners` | **仅创建时可用**；stringified 对象数组 `"[{\"role\":\"<role_id>\",\"owners\":[\"<userkey>\"]}]"` |
 | `signal` | option_id 纯字符串 `"<option_id>"`（以 `workitem meta-fields` 的 `options[].option_id` 为准；不接受 `"true"`/`"false"`/`"null"`） |
 | `workitem_related_multi_select` | **stringified** ID 数组，**禁止写入自身 ID**（防循环引用，触发 `exists loop`） |
-| `file` / `multi-file` | 先调 `attachment +upload`，传 `--resource-type=15`、`--project-key`、`--work-item-type`、`--field-key` 和本地文件路径（工作项尚未创建，不传 `--work-item-id`）拿 `file_token`，再 stringify 数组 `"[{\"name\":\"a.pdf\",\"type\":\"application/pdf\",\"size\":\"12345\",\"fileToken\":\"<token>\"}]"` |
+| `multi-file` | 按 [attachment.md](attachment.md) 完成“本地文件校验 → 字段消歧 → 对象存储上传 → 字段绑定 → 写后验收”。单附件可随创建写入；多个附件先随创建写入第一个，获得工作项 ID 后再逐个读取、合并并更新，避免 `unique` 校验与覆盖丢失 |
+| `file` | 按 [attachment.md](attachment.md) 的兼容性规则处理；不得假设旧版或单附件字段支持多附件，也不得与 `multi-file` 共用未经验证的多附件写入协议 |
 
 > 其余通用字段类型（text / user / multi-user / date / schedule / precise_date / select 系列等）写入格式详见主文档 [SKILL.md](../SKILL.md)「字段值格式」章节。
 
@@ -97,10 +100,13 @@ meegle workitem create --work-item-type 类型key --fields '[{"field_key":"templ
 
 ### STEP 7 — 确认结果
 
-创建成功后，向用户展示：
+创建成功后，如涉及附件，必须先调 `workitem get` 回读已消歧的目标字段，逐一核对请求文件名和数量。上传接口返回 token、创建接口返回成功，均不能替代目标字段的写后验收；回读了其他附件字段也不算成功。
+
+验收通过后，向用户展示：
 - 工作项 ID 和名称
 - 链接（如返回中包含）
 - 已设置的关键字段摘要
+- 附件目标字段名/key、实际文件名和数量；无法验证页面布局时仅声明 API 字段写入成功
 
 ---
 

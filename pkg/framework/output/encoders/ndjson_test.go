@@ -4,6 +4,7 @@
 package encoders
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -27,6 +28,18 @@ func TestEncodeNDJSON_ArrayOfObjects(t *testing.T) {
 	const want = "{\"id\":1}\n{\"id\":2}\n"
 	if string(out) != want {
 		t.Fatalf("want %q, got %q", want, out)
+	}
+}
+
+func TestEncodeNDJSONRawMessagePreservesJSONNumberLexemes(t *testing.T) {
+	raw := json.RawMessage(`[{"large":9007199254740993,"decimal":1.2300,"exponent":1e+30}]`)
+	out, err := EncodeNDJSON(raw)
+	if err != nil {
+		t.Fatalf("EncodeNDJSON: %v", err)
+	}
+	const want = "{\"decimal\":1.2300,\"exponent\":1e+30,\"large\":9007199254740993}\n"
+	if string(out) != want {
+		t.Fatalf("output = %q, want %q", out, want)
 	}
 }
 

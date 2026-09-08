@@ -24,11 +24,13 @@
 
 | 调用 | 条件 | 说明 |
 |------|------|------|
-| `workitem meta-fields(field_query="字段名")` | 涉及字段修改 | 用 `field_query` 模糊搜索或 `field_keys` 精确匹配，**禁止逐页遍历** |
+| `workitem meta-fields(field_query="字段名")` | 涉及字段修改 | 普通字段用 `field_query` 模糊搜索或 `field_keys` 精确匹配，禁止无筛选逐页遍历；附件字段消歧按 [attachment.md](attachment.md) 使用类型过滤并翻页到 `has_more=false` |
 | `workitem meta-roles` | 涉及角色修改 | 获取角色 key |
 | `user search` | 涉及人员字段 | 批量转换姓名为 userkey |
 
-🚨 **效率要求**：必须一轮并发完成所有配置查询，第二轮直接执行更新。禁止逐个串行查询。
+🚨 **效率要求**：普通配置必须一轮并发查询，下一轮直接执行更新，禁止逐个串行查询。唯一例外是附件字段消歧：首轮按类型过滤查询；若 `has_more=true`，必须继续串行翻页收集完全部候选后才能更新。
+
+**附件字段门禁**：只要用户要求上传附件，就必须实时查询当前空间和真实工作项类型下全部 `file` 和 `multi-file` 字段。用户指定字段名或 key 时做精确匹配；用户只说“附件”且出现多个候选时，列出字段名、key、类型并让用户选择。禁止默认取第一个，禁止复用历史会话里的附件字段，禁止把 `attachment` 或 `multi_attachment` 写死。确定目标后，上传、更新和回读都必须使用同一个字段 key。完整协议见 [attachment.md](attachment.md)。
 
 ### STEP 3 — 转换字段值
 
@@ -42,7 +44,8 @@
 | `signal` | `option_id` 字符串（以 `workitem meta-fields` 的 `options[].option_id` 为准；不接受 `"true"`/`"false"`/`"null"`） |
 | `workitem_related_multi_select` | **stringified** ID 数组，**禁止写入自身 ID**（防循环引用，触发 `exists loop` 报错） |
 | `group_type` | 拉群方式为逻辑字段，读返回判别键 `value`，写协议判别键 `type`（`auto`/`bind`/`disabled`），**读写不对称** |
-| `file` / `multi-file` | 先调 `attachment +upload`，传 `--resource-type=15`、`--project-key`、`--work-item-id`、`--field-key` 和本地文件路径拿 `file_token`，再 **stringify** 数组 `"[{\"name\":\"a.pdf\",\"type\":\"application/pdf\",\"size\":\"12345\",\"fileToken\":\"<token>\"}]"` |
+| `multi-file` | 按 [attachment.md](attachment.md) 完成“本地文件校验 → 字段消歧 → 对象存储上传 → 字段绑定 → 写后验收”；追加时必须读取并保留当前完整数组，再逐个追加 |
+| `file` | 按 [attachment.md](attachment.md) 的兼容性规则处理；不得假设旧版或单附件字段支持多附件，也不得与 `multi-file` 共用未经验证的多附件写入协议 |
 
 > 其余通用字段类型（text / number / bool / multi-user / date / schedule / precise_date / select 系列 / multi-text 等）写入格式详见主文档 [SKILL.md](../SKILL.md)「字段值格式」章节。
 
@@ -81,7 +84,7 @@ meegle workitem update --work-item-id 工作项ID --project-key 空间key --role
 
 ### STEP 5 — 返回结果
 
-展示修改了哪些字段及修改后的值。
+如涉及附件，先调 `workitem get` 回读已消歧的目标字段，逐一核对请求文件名和数量。上传接口或更新接口返回成功，都不能替代目标字段的写后验收。验收通过后再展示修改字段、目标附件字段名/key、实际文件名和数量；无法验证页面布局时仅声明 API 字段写入成功。
 
 ---
 
@@ -100,7 +103,7 @@ meegle workitem update --work-item-id 工作项ID --project-key 空间key --role
 | 树状多选（`tree-multi-select`） | 纯字符串一维数组 `["id1", "id2"]`，去重 |
 | 关联工作项（`workitem_related_multi_select`） | 旧 ID + 新 ID，去重后写入（只能绑定同空间或白名单空间实例） |
 | 多选人员（`multi-user`） | 旧 userkey + 新 userkey，去重 |
-| 附件（`multi-file`） | 取旧附件数组，把新 +upload 拿到的 `{name,type,size,fileToken}` 拼上去，整体 stringify 写回（`update` 是覆盖语义，不取旧值会丢历史附件） |
+| 附件（`multi-file`） | 按 [attachment.md](attachment.md) 逐个追加：每轮读取目标字段，把旧附件完整对象（包括服务端补充的 `uid`、`url` 和未知字段）原样保留，只追加一个新对象，整体 stringify 写回后立即回读验收。`update` 是覆盖语义，不取旧值会丢历史附件 |
 
 **3. 覆盖写入** → 通过 `workitem update` 写入合并后的值
 

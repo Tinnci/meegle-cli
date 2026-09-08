@@ -4,11 +4,28 @@
 package output
 
 import (
+	"encoding/json"
 	"reflect"
 	"testing"
 
 	"github.com/larksuite/meegle-cli/pkg/framework/executor"
 )
+
+func TestFieldSelectorHookPreservesNumberFromRawMessage(t *testing.T) {
+	hook := FieldSelectorHook{}
+	ctx := &Context{
+		Options: &FormatOptions{Select: []string{"id"}},
+		Result:  &executor.RawResult{},
+	}
+	out, err := hook.Process(ctx, json.RawMessage(`{"id":9007199254740993,"ignored":true}`))
+	if err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+	got := out.(map[string]any)["id"]
+	if want := json.Number("9007199254740993"); got != want {
+		t.Fatalf("id = %#v (%T), want %#v", got, got, want)
+	}
+}
 
 func TestFieldSelectorHookNoOp(t *testing.T) {
 	hook := FieldSelectorHook{}

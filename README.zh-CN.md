@@ -604,16 +604,24 @@ missing required parameters: --user-key, --work-item-type
 
 ### --set key=value（通用）
 
-`--set` 是普通 flag 的**替代写法**，只影响**顶层参数**：`--set key=value` 等价于 `--key value`。适合在脚本里用统一的 key=value 语法，或通过 dot-path 写嵌套顶层对象。值自动类型推断（int / float / bool / string）。
+`--set` 是普通 flag 的**替代写法**，只影响**顶层参数**。当推断出的值类型与命令 schema 一致时，`--set key=value` 等价于 `--key value`。它适合在脚本里使用统一的 key=value 语法，或通过 dot-path 写嵌套顶层对象。合法 JSON 数字会作为精确数字保留（包括大整数、高精度小数和指数形式），`true` / `false` 会转为布尔值，其他值保持字符串。
 
 ```bash
 # 下面两种等价：
 meegle mywork todo --action this_week --page-num 1
 meegle mywork todo --set action=this_week --set page_num=1
 
+# 精确保留的 JSON 数字，不经过 float64 或 int64 转换：
+--set work_item_id=9007199254740993
+
+# 不是合法 JSON 数字，因此保持字符串 "01"：
+--set external_id=01
+
 # dot-path 嵌套（Meegle 很少用到，但支持）：
 --set extra.flag=true          # 变成 {"extra":{"flag":true}}
 ```
+
+无论通过具名 flag、`--params` 还是 `--set` 提供，接口 schema 声明的标量数字参数都会使用相同的精确表示：`number` 接受任意合法 JSON 数字；`integer` 还要求值在数学上为整数，但不受 Go `int64` 范围限制。schema 要求标量数字或整数时，`+1`、`01` 等非 JSON 数字写法以及非数字 JSON 值会在请求发出前被拒绝。分页序号等明确的 CLI 控制参数仍会按需要做范围校验。
 
 `--set` 只写**顶层参数**，**不会**写到工作项的 `fields[]`。写 `fields[]` 请用 `--params '{"fields":[...]}'`（见下）。
 

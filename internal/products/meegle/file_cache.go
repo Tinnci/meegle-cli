@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/larksuite/meegle-cli/pkg/framework/jsonvalue"
 )
 
 // jsonFileCache owns the shared persistence mechanics for profile-scoped JSON
@@ -43,7 +45,7 @@ func (cache *jsonFileCache[T]) Get() (*jsonFileCacheResult[T], error) {
 		return nil, nil
 	}
 	var value T
-	if err := json.Unmarshal(data, &value); err != nil {
+	if err := jsonvalue.Unmarshal(data, &value); err != nil {
 		return nil, nil
 	}
 	stale := time.Since(time.UnixMilli(cache.timestamp(value))) > cache.ttl

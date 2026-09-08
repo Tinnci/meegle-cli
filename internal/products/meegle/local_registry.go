@@ -204,11 +204,11 @@ func appendLocalMappedCommands(commands *[]types.MappedCommand, parentPath []str
 
 func inspectParameterType(flagType string) string {
 	switch flagType {
-	case registry.FlagTypeInt, registry.FlagTypeFloat:
+	case registry.FlagTypeInt, registry.FlagTypeFloat, registry.FlagTypeInteger, registry.FlagTypeNumber:
 		return "number"
 	case registry.FlagTypeBool:
 		return "boolean"
-	case registry.FlagTypeStringSlice, registry.FlagTypeStringArray, registry.FlagTypeIntSlice, registry.FlagTypeObjectSlice:
+	case registry.FlagTypeStringSlice, registry.FlagTypeStringArray, registry.FlagTypeIntSlice, registry.FlagTypeIntegerSlice, registry.FlagTypeObjectSlice:
 		return "array"
 	case registry.FlagTypeObject:
 		return "object"
@@ -219,7 +219,7 @@ func inspectParameterType(flagType string) string {
 
 func inspectParameterItemType(flagType string) string {
 	switch flagType {
-	case registry.FlagTypeIntSlice:
+	case registry.FlagTypeIntSlice, registry.FlagTypeIntegerSlice:
 		return "number"
 	case registry.FlagTypeObjectSlice:
 		return "object"

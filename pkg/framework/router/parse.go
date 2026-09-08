@@ -4,12 +4,14 @@
 package router
 
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
 
 	frameworkadapter "github.com/larksuite/meegle-cli/pkg/framework/adapter"
 	frameworkerrors "github.com/larksuite/meegle-cli/pkg/framework/errors"
+	"github.com/larksuite/meegle-cli/pkg/framework/jsonvalue"
 	"github.com/larksuite/meegle-cli/pkg/framework/registry"
 )
 
@@ -78,9 +80,11 @@ func parseTokens(tokens []string, defs []registry.FlagDef) (map[string]any, map[
 				key = strings.ToLower(parts[0])
 				value := parts[1]
 				if def, ok := flagDefs[key]; ok {
-					flags[key] = parseValue(value, def.Type)
-					explicitFlags[key] = parseValue(value, def.Type)
-					rawFlags[key] = value
+					parsed, err := parseValue(key, value, def.Type)
+					if err != nil {
+						return nil, nil, nil, nil, false, err
+					}
+					storeParsedFlag(flags, explicitFlags, rawFlags, key, value, parsed, def.Type)
 				}
 			} else {
 				key = strings.ToLower(key)
@@ -89,11 +93,13 @@ func parseTokens(tokens []string, defs []registry.FlagDef) (map[string]any, map[
 						flags[key] = true
 						explicitFlags[key] = true
 						rawFlags[key] = "true"
-					} else if i+1 < len(tokens) && !strings.HasPrefix(tokens[i+1], "-") {
+					} else if i+1 < len(tokens) && canConsumeFlagValue(tokens[i+1], flagDefs, flagShorts) {
 						i++
-						flags[key] = parseValue(tokens[i], def.Type)
-						explicitFlags[key] = parseValue(tokens[i], def.Type)
-						rawFlags[key] = tokens[i]
+						parsed, err := parseValue(key, tokens[i], def.Type)
+						if err != nil {
+							return nil, nil, nil, nil, false, err
+						}
+						storeParsedFlag(flags, explicitFlags, rawFlags, key, tokens[i], parsed, def.Type)
 					}
 				}
 			}
@@ -105,11 +111,13 @@ func parseTokens(tokens []string, defs []registry.FlagDef) (map[string]any, map[
 					flags[fullName] = true
 					explicitFlags[fullName] = true
 					rawFlags[fullName] = "true"
-				} else if i+1 < len(tokens) && !strings.HasPrefix(tokens[i+1], "-") {
+				} else if i+1 < len(tokens) && canConsumeFlagValue(tokens[i+1], flagDefs, flagShorts) {
 					i++
-					flags[fullName] = parseValue(tokens[i], def.Type)
-					explicitFlags[fullName] = parseValue(tokens[i], def.Type)
-					rawFlags[fullName] = tokens[i]
+					parsed, err := parseValue(fullName, tokens[i], def.Type)
+					if err != nil {
+						return nil, nil, nil, nil, false, err
+					}
+					storeParsedFlag(flags, explicitFlags, rawFlags, fullName, tokens[i], parsed, def.Type)
 				}
 			}
 		} else {
@@ -120,22 +128,80 @@ func parseTokens(tokens []string, defs []registry.FlagDef) (map[string]any, map[
 	return flags, explicitFlags, rawFlags, args, isHelp, nil
 }
 
-func parseValue(val string, typ string) any {
+func canConsumeFlagValue(token string, flagDefs map[string]registry.FlagDef, flagShorts map[string]string) bool {
+	if !strings.HasPrefix(token, "-") || token == "-" {
+		return true
+	}
+	if strings.HasPrefix(token, "--") {
+		name := strings.TrimPrefix(token, "--")
+		name, _, _ = strings.Cut(name, "=")
+		if name == "help" {
+			return false
+		}
+		_, registered := flagDefs[strings.ToLower(name)]
+		return !registered
+	}
+	short := strings.TrimPrefix(token, "-")
+	short, _, _ = strings.Cut(short, "=")
+	if short == "h" {
+		return false
+	}
+	_, registered := flagShorts[strings.ToLower(short)]
+	return !registered
+}
+
+func storeParsedFlag(flags, explicitFlags map[string]any, rawFlags map[string]string, key, raw string, parsed any, typ string) {
+	if typ == registry.FlagTypeIntegerSlice {
+		current, _ := flags[key].([]json.Number)
+		values, _ := parsed.([]json.Number)
+		merged := append(append([]json.Number(nil), current...), values...)
+		flags[key] = merged
+		explicitFlags[key] = append([]json.Number(nil), merged...)
+		if previous := rawFlags[key]; previous != "" {
+			rawFlags[key] = previous + "," + raw
+		} else {
+			rawFlags[key] = raw
+		}
+		return
+	}
+	flags[key] = parsed
+	explicitFlags[key] = parsed
+	rawFlags[key] = raw
+}
+
+func parseValue(name, val, typ string) (any, error) {
 	switch typ {
 	case registry.FlagTypeInt:
 		if i, err := strconv.ParseInt(val, 10, 64); err == nil {
-			return int(i)
+			return int(i), nil
 		}
 	case registry.FlagTypeFloat:
 		if f, err := strconv.ParseFloat(val, 64); err == nil {
-			return f
+			return f, nil
 		}
+	case registry.FlagTypeNumber, registry.FlagTypeInteger:
+		number, err := jsonvalue.ParseNumber(val)
+		if err != nil || typ == registry.FlagTypeInteger && !jsonvalue.IsInteger(number) {
+			return nil, invalidExactNumericFlag(name, typ)
+		}
+		return number, nil
+	case registry.FlagTypeIntegerSlice:
+		rawValues := strings.Split(val, ",")
+		values := make([]json.Number, 0, len(rawValues))
+		for _, raw := range rawValues {
+			number, err := jsonvalue.ParseNumber(raw)
+			if err != nil || !jsonvalue.IsInteger(number) {
+				return nil, invalidExactNumericFlag(name, typ)
+			}
+			values = append(values, number)
+		}
+		return values, nil
 	case registry.FlagTypeBool:
-		return val == "true" || val == "1" || val == "yes"
+		return val == "true" || val == "1" || val == "yes", nil
 	case registry.FlagTypeStringSlice, registry.FlagTypeStringArray:
-		return []string{val}
+		return []string{val}, nil
 	}
-	return val
+	return val, nil
 }
 
 func validateArgs(defs []registry.ArgDef, args []string) error {

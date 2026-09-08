@@ -70,6 +70,17 @@ func TestUnwrapResponse_NoLogIDLeavesFieldEmpty(t *testing.T) {
 	}
 }
 
+func TestUnwrapResponse_PlainTextFallbackUnchanged(t *testing.T) {
+	raw := mustMarshal(t, mcpToolResponse{Content: []mcpContentEntry{{Type: "text", Text: "plain response"}}})
+	got, err := unwrapResponse(raw)
+	if err != nil {
+		t.Fatalf("unwrapResponse: %v", err)
+	}
+	if got.Data != "plain response" || got.Raw != "plain response" {
+		t.Fatalf("response = %#v, want unchanged plain-text fallback", got)
+	}
+}
+
 func mustMarshal(t *testing.T, v any) json.RawMessage {
 	t.Helper()
 	b, err := json.Marshal(v)

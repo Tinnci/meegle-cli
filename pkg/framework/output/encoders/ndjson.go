@@ -6,6 +6,8 @@ package encoders
 import (
 	"bytes"
 	"encoding/json"
+
+	"github.com/larksuite/meegle-cli/pkg/framework/jsonvalue"
 )
 
 // EncodeNDJSON emits one JSON record per line.
@@ -43,7 +45,7 @@ func EncodeNDJSON(data any) ([]byte, error) {
 func normalize(data any) any {
 	if raw, ok := data.(json.RawMessage); ok && json.Valid(raw) {
 		var decoded any
-		if json.Unmarshal(raw, &decoded) == nil {
+		if jsonvalue.Unmarshal(raw, &decoded) == nil {
 			return decoded
 		}
 	}

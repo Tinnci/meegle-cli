@@ -91,7 +91,8 @@ meegle workitem meta-fields --page-num 1 --project-key 空间key --work-item-typ
 | `multi-select` | **stringified** `"[{\"option_id\":\"xxx\"}]"`；若字段配置允许新增选项且用户明确提出新值，可生成 8 位随机小写加下划线格式的 option_id 填入 |
 | `tree-multi-select` | **stringified 字符串一维数组** `"[\"id1\",\"id2\"]"`（🚨 不可对象数组） |
 | `signal` | option_id 字符串（以 `workitem meta-fields` 的 `options[].option_id` 为准；不接受 `"true"`/`"false"`/`"null"`） |
-| `file` / `multi-file` | 先调 `attachment +upload`，传 `--resource-type=15`、`--project-key`、`--work-item-id`、`--field-key` 和本地文件路径拿 `file_token`，再 **stringify** 数组 `"[{\"name\":\"a.pdf\",\"type\":\"application/pdf\",\"size\":\"12345\",\"fileToken\":\"<token>\"}]"` |
+| `multi-file` | 按 [attachment.md](attachment.md) 执行完整协议：实时消歧目标字段、完成对象存储上传、写入字段并回读同一字段验收；多个附件逐个追加 |
+| `file` | 按 [attachment.md](attachment.md) 的兼容性规则处理，不得假设它与 `multi-file` 具有相同的多附件能力 |
 
 > 其余通用字段类型（text / number / bool / user / multi-user / date / schedule / precise_date / multi-text / workitem_related_select 等）写入格式详见主文档 [SKILL.md](../SKILL.md)「字段值格式」章节。
 

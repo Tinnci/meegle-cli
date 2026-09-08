@@ -39,3 +39,18 @@ func TestDetectShape_DecodesRawMessage(t *testing.T) {
 		t.Fatalf("want ObjectArray, got %v", got)
 	}
 }
+
+func TestNormalizeRawMessagePreservesJSONNumberLexemes(t *testing.T) {
+	raw := json.RawMessage(`{"large":9007199254740993,"decimal":1.2300,"exponent":1e+30}`)
+	got := Normalize(raw).(map[string]any)
+	wants := map[string]json.Number{
+		"large":    "9007199254740993",
+		"decimal":  "1.2300",
+		"exponent": "1e+30",
+	}
+	for key, want := range wants {
+		if got[key] != want {
+			t.Errorf("%s = %#v (%T), want %#v", key, got[key], got[key], want)
+		}
+	}
+}

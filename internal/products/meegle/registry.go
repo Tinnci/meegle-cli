@@ -671,7 +671,9 @@ func mapParamType(paramType string) string {
 	case "string":
 		return registry.FlagTypeString
 	case "number":
-		return registry.FlagTypeString // Product layer conversion
+		return registry.FlagTypeNumber
+	case "integer":
+		return registry.FlagTypeInteger
 	case "boolean":
 		return registry.FlagTypeBool
 	case "array":

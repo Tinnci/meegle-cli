@@ -330,6 +330,12 @@ func registerFlag(fs *pflag.FlagSet, def registry.FlagDef) {
 		fs.BoolP(def.Name, def.Short, boolDefault(def.Default), def.Description)
 	case registry.FlagTypeFloat:
 		fs.Float64P(def.Name, def.Short, floatDefault(def.Default), def.Description)
+	case registry.FlagTypeNumber, registry.FlagTypeInteger:
+		fs.StringP(def.Name, def.Short, exactNumberDefault(def.Default), def.Description)
+		_ = fs.SetAnnotation(def.Name, exactNumericFlagTypeAnnotation, []string{def.Type})
+	case registry.FlagTypeIntegerSlice:
+		fs.StringSliceP(def.Name, def.Short, exactIntegerSliceDefault(def.Default), def.Description)
+		_ = fs.SetAnnotation(def.Name, exactNumericFlagTypeAnnotation, []string{def.Type})
 	case registry.FlagTypeStringSlice:
 		fs.StringSliceP(def.Name, def.Short, stringSliceDefault(def.Default), def.Description)
 	case registry.FlagTypeStringArray:
