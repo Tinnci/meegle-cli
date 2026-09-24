@@ -20,4 +20,4 @@
 
 - **分批查询**：`workhour list-schedule` 多人时拆成每批 ≤ 20 人并行
 - **精简 SELECT**：只选必要字段，避免富文本等大体积字段
-- **按需翻页**：先读首页获取总数，按需翻页
+- **按需翻页**：先读首页取 `list[0].count`；`workitem query` 要全量时用 `--session-id` + `--group-pagination-list` 逐页取（SKILL.md「翻页取全量」），不要用 `LIMIT offset, n`
