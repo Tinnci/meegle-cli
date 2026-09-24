@@ -1,6 +1,6 @@
 # 错误处理规则
 
-> 症状 → 修复动作映射。语法/协议细节引用 [mql-syntax.md](mql-syntax.md) 与 SKILL.md「字段值格式」。
+> 症状 → 修复动作映射。语法/协议细节引用 `mql-basics.md` / `mql-operators.md` / `mql-time-status.md` / `mql-people-roles.md` / `mql-nodes-relations.md` 与 SKILL.md「字段值格式」。
 
 **通用原则**：从报错提取关键字 → 匹配下表修复 → 重试。**同一错误最多自动重试 2 次（共 3 次尝试）**。仍失败则停止自愈，向用户结构化说明：① 原始请求与目标语义；② 每次修复的关键改动与服务端返回；③ 推测根因（字段/角色/枚举不存在、无权限等）并请求澄清。**禁止无限重试或反复微调同一参数**。
 
@@ -16,7 +16,7 @@
 |---------|---------|
 | 字段 key 在该空间+工作项类型下不存在 | 立即调 `workitem meta-fields`，同时传空间、类型与报错中的字段名，替换重试 |
 | 字段中文名歧义（多字段同名） | 改用字段 key。通过 `workitem meta-fields` 的 `field_query` 拿所有匹配 key，选语义正确的替换；无法判断询问用户 |
-| 把角色当字段写（如 `经办人`） | 见 [mql-syntax.md §12 角色](mql-syntax.md)：`workitem meta-roles` 取 `role_name` / `role_id`，用 `` `__<role_name>` `` 或 fallback 复合列名 |
+| 把角色当字段写（如 `经办人`） | 见 [mql-people-roles.md §3 角色列](mql-people-roles.md)：`workitem meta-roles` 取 `role_name` / `role_id`，用 `` `__<role_name>` `` 或 fallback 复合列名 |
 | 枚举值/状态值在该空间+工作项类型下不存在 | `workitem meta-fields` 精确获取对应字段的 options，用真实 label 替换。禁硬编码 |
 | 树状字段值写成完整路径或非叶子 | `workitem meta-fields` 获取 options，确认叶子 `option_id` / label；父级查询改用 `any_match` |
 | 查询不支持的字段类型（`attachment` / `file` / `spec_doc` / `specDocs`） | 从 SELECT/WHERE 移除，改用 `workitem get`。**`multi-file` 例外**：允许 `SELECT` / `IS NULL` / `IS NOT NULL`；深度筛选不支持 |
@@ -25,12 +25,12 @@
 
 | 报错症状 | 修复动作 |
 |---------|---------|
-| 中文字符编码损坏 | 整个 MQL 用单引号包裹、中文名反引号、无多余反斜杠。重构重试 |
-| 用了硬规则禁用语法（`SELECT *`、`count()`/`GROUP BY`、`REGEXP`、`CONTAINS()`） | 对照 [mql-syntax.md §1.1](mql-syntax.md)。`LIMIT ... OFFSET n` / `LIMIT n,count` 均支持，推荐配 `ORDER BY` |
+| 中文字符编码损坏 | 按 [mql-basics.md §10](mql-basics.md) 保留 MQL 原文；Shell 调用用带引号定界符的 heredoc，避免引号与反引号被展开。重构重试 |
+| 用了硬规则禁用语法（`SELECT *`、`count()`/`GROUP BY`、`REGEXP`、`CONTAINS()`） | 对照 [mql-basics.md §3](mql-basics.md)。`LIMIT n` 只截断（n ≤ 50），不要用 `LIMIT offset, n` 翻页，翻页走 `session_id` + `group_pagination_list` |
 | 字段名未加反引号导致 `syntax error near ':...'` | 字段名用反引号；含 `<target:xxx>` 时**整体**放同一对反引号（`` `name<target:all>` ``） |
 | 顶层 SELECT/WHERE 用了 `` `name<target:all>` `` 报 `attribute[...] not found` | `<target:xxx>` **仅**允许在关系判断 lambda 内（`` x.`name<target:all>` `` 形式）；顶层引用去掉修饰符 |
 | 用 `\'` 转义单引号 | 改用 `''`（两个单引号） |
-| `Internal % and _ characters must be escaped` | LIKE 内部字面量 `%` / `_` 必须写作 `\%` / `\_`；即便 `_` 出现在关键词中间（如 `%test_case%`）也会被服务端强制拒回，必须转义为 `%test\_case%`。见 [mql-syntax.md §1.6](mql-syntax.md) |
+| `Internal % and _ characters must be escaped` | LIKE 内部字面量 `%` / `_` 必须写作 `\%` / `\_`；即便 `_` 出现在关键词中间（如 `%test_case%`）也会被服务端强制拒回，必须转义为 `%test\_case%`。见 [mql-basics.md §7](mql-basics.md) |
 | LIKE 缺通配符 | 完整包含形态 `LIKE '%关键词%'` |
 
 ### 1.3 语义类
@@ -40,22 +40,22 @@
 | FROM 缺空间或类型 | 修正为 `` FROM `project_key`.`work_item_type_key` `` |
 | SELECT 中放了函数（`current_login_user()`、`array_contains()`） | 从 SELECT 移除，函数只能在 WHERE 中 |
 | `parent_work_item() not supported in stage Where` | `parent_work_item()` 仅支持 SELECT；WHERE 中按父工作项过滤改用 `` any_relation_match(relation_field_chain('__父工作项'), x -> x.`work_item_id<target:all>` = '<父ID>') `` |
-| 操作符与字段类型不兼容 | 对照 [mql-syntax.md §4 兼容性表](mql-syntax.md) 修正。常见：`number` / `bigint` 不支持 `BETWEEN` / `LIKE` / `array_contains`，改为 `>=` + `<=` / 精确等值 |
+| 操作符与字段类型不兼容 | 对照 [mql-operators.md §1 兼容表](mql-operators.md) 修正。常见：`number` / `bigint` 不支持 `BETWEEN` / `LIKE` / `array_contains`，改为 `>=` + `<=` / 精确等值 |
 | 多值右值用了 JSON 数组字符串（`IN '["a","b"]'`） | `IN` 直接 syntax error，改元组 `IN ('a','b')`。`=` 服务端当前兼容 JSON 数组字符串但非推荐写法，统一改元组 `= ('a','b')`。**例外**：`array_intersect` / `risk_label() = ...` 保留 JSON 数组字符串 |
-| `tree-multi-select` / `workitem_related_multi_select` 右值拒回 `metadata error` 或 `attrValueLabel not found`（如裸 option_id / 裸 work_item_id） | 改为 label 或 `<id:option_id>` / `<id:work_item_id>` 包裹形式。见 [mql-syntax.md §5.1](mql-syntax.md) |
+| `tree-multi-select` / `workitem_related_multi_select` 右值拒回 `metadata error` 或 `attrValueLabel not found`（如裸 option_id / 裸 work_item_id） | 改为 label 或 `<id:option_id>` / `<id:work_item_id>` 包裹形式。见 [mql-operators.md §1](mql-operators.md) |
 | signal 字段 `IS NULL` / `IS NOT NULL` 报 `operator not supported` | signal 不支持空判断，改用 `!= '真实 label'` 或去掉该条件 |
 | signal 值位传了 `option_id` / `<id:>` / `'true'` / `'false'` / `'null'` | 改用 `option_name` label（如 `'已通过'`） |
-| Lambda 报 `lambda predicate operator not supported: <OP>` / `unsupported lambda predicate` | Lambda 内仅支持 `x = 'v'`、`x IN (...)`、同变量 OR。其余（`!=` / `NOT IN` / 比较符 / `LIKE` / `BETWEEN` / `IS NULL` / `RELATIVE_DATETIME_*` / `AND` 复合 / 嵌套 Match）全部拒回。见 [mql-syntax.md §14](mql-syntax.md)。多选/数组字段优先用顶层 `IN` / `NOT IN` / `array_contains` / `none_match`；仅值列表含 `team()` / `current_login_user()` 时用 `any_match` |
-| `get_node_attribute('__BELONGING','状态')` 触发 nil pointer / panic | 见 [mql-syntax.md §15.6](mql-syntax.md) 权威规则：状态类改用 `=` 顶层比较（禁被 `array_contains` 包裹）；`__BELONGING` 属性禁 AND 组合 |
+| Lambda 报 `lambda predicate operator not supported: <OP>` / `unsupported lambda predicate` | Lambda 内仅支持 `x = 'v'`、`x IN (...)`、同变量 OR。其余（`!=` / `NOT IN` / 比较符 / `LIKE` / `BETWEEN` / `IS NULL` / `RELATIVE_DATETIME_*` / `AND` 复合 / 嵌套 Match）全部拒回。见 [mql-operators.md §5](mql-operators.md)。多选/数组字段优先用顶层 `IN` / `NOT IN` / `array_contains` / `none_match`；仅值列表含 `team()` / `current_login_user()` 时用 `any_match` |
+| `get_node_attribute('__BELONGING','状态')` 触发 nil pointer / panic | 见 [mql-nodes-relations.md §4](mql-nodes-relations.md) 权威规则：状态类改用 `=` 顶层比较（禁被 `array_contains` 包裹）；`__BELONGING` 属性禁 AND 组合 |
 
 ### 1.4 参数类
 
 | 报错症状 | 修复动作 |
 |---------|---------|
-| `RELATIVE_DATETIME_*` 报 `unexpected operator for future` / `invalid argument` | 见 [mql-syntax.md §6.1 兼容矩阵](mql-syntax.md)：`_EQ` 只接受 `today`/`tomorrow`/`yesterday` 且**无 offset**；`_GT/_GE/_LT/_LE` 只接受 `today`（可带 `±Nd`）；`future`/`past`+`Nd` 只允许配 `_BETWEEN` |
+| `RELATIVE_DATETIME_*` 报 `unexpected operator for future` / `invalid argument` | 见 [mql-time-status.md §1.1 兼容矩阵](mql-time-status.md)：`_EQ` 只接受 `today`/`tomorrow`/`yesterday` 且**无 offset**；`_GT/_GE/_LT/_LE` 只接受 `today`（可带 `±Nd`）；`future`/`past`+`Nd` 只允许配 `_BETWEEN` |
 | ORDER BY 字段不支持排序 | 换可排序字段（如 `updated_at` / `start_time` / `work_item_id`）或移除 |
-| MQL 与 session_id 都空 | 首查必须传 MQL；翻页必须传 session_id |
-| 翻页参数缺失 | 传 `[{"group_id":"1","page_num":N}]`（无分组时 `group_id` 固定 `"1"`） |
+| MQL 与 session_id 都空 | 首查必须传 MQL；翻页必须传首查返回的 session_id |
+| 翻页参数缺失 / 翻页仍回第 1 页 | 传 `--group-pagination-list '[{"group_id":"1","page_num":N}]'`（无分组时 `group_id` 固定 `"1"`，N 从 2 起）；翻页时不要再传 `--mql`，同传会按新查询重跑 |
 | 未传 project_key | `workitem query` 的 `--project-key` 必填 |
 | 空间不存在 | 用 `project search` 确认 |
 | 空间名匹配多个 | 从报错提取候选，让用户选择或用精确 project_key 重试 |

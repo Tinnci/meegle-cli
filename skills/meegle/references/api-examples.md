@@ -45,19 +45,23 @@ meegle workitem meta-roles --page-num 1 --project-key 空间key --work-item-type
 首查：
 
 ```bash
-meegle workitem query --project-key 空间key --mql 'SELECT `work_item_id`, `name`, `work_item_status` FROM `空间key`.`story` WHERE `archiving_date` IS NULL' --format json
+meegle workitem query --project-key 空间key --mql "$(cat <<'MQL'
+SELECT `work_item_id`, `name`, `work_item_status` FROM `空间key`.`story` WHERE `archiving_date` IS NULL
+MQL
+)" --format json
 ```
 
-无分组翻页时 group_id 传 `"1"`：
+首查返回第 1 页（最多 50 条）和 `session_id`、`list[0].count`、`list[0].group_infos[].group_id`。
+翻页只传 `--project-key` + `--session-id` + `--group-pagination-list`，不传 `--mql`；`page_num` 从 2 取到 ceil(count/50)。无分组时 `group_id` 为 `"1"`：
 
 ```bash
-meegle workitem query --project-key 空间key --session-id 首查返回的session_id --mql '' --group-pagination-list '[{"group_id":"1","page_num":2}]' --format json
+meegle workitem query --project-key 空间key --session-id 首查返回的session_id --group-pagination-list '[{"group_id":"1","page_num":2}]' --format json
 ```
 
 有分组翻页时，group_id 从首查 `list[].group_infos[].group_id` 取：
 
 ```bash
-meegle workitem query --project-key 空间key --session-id 首查返回的session_id --mql '' --group-pagination-list '[{"group_id":"分组ID","page_num":3}]' --format json
+meegle workitem query --project-key 空间key --session-id 首查返回的session_id --group-pagination-list '[{"group_id":"分组ID","page_num":3}]' --format json
 ```
 
 ### workitem get
