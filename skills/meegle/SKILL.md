@@ -87,24 +87,25 @@ description: |
 **拉群方式更新（`group_type` 逻辑字段）**：要修改/读取拉群方式统一走 `group_type`，不要再单独操作 `group_id` / `chat_group`。写协议 `field_value` 形如：`{"type": "auto" | "bind" | "disabled", "group_id": "oc_xxx"}`（注意写用 `type` 作为判别键，**与读返回的 `value` 不对称**）。校验规则（服务端实际报错文本）：`bind` 不带 `group_id` 或带空串/纯空格 → `group_id is required when group_type=bind`；`auto`/`disabled` 同时带 `group_id` → `group_type conflicts with group_id: type=<auto|disabled>`。详细示例见 [references/sop-update-workitem.md](references/sop-update-workitem.md)。
 
 ### workitem query
-使用 MQL 查询工作项数据。语法详见 [references/mql-syntax.md](references/mql-syntax.md)。
+使用 MQL 查询工作项数据。语法按主题拆在 6 个文件：基础与硬规则 [references/mql-basics.md](references/mql-basics.md)、运算符与数组函数 [references/mql-operators.md](references/mql-operators.md)、时间与状态 [references/mql-time-status.md](references/mql-time-status.md)、人员与角色 [references/mql-people-roles.md](references/mql-people-roles.md)、节点与关联 [references/mql-nodes-relations.md](references/mql-nodes-relations.md)、整句示例与关键词映射 [references/mql-examples.md](references/mql-examples.md)。写 MQL 前至少读 basics 与 operators。
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | --project-key | string | 是 | 空间标识（支持名称、simpleName、projectKey） |
-| --mql | string | 是（翻页时可用 session_id 替代） | MQL 查询语句（完整 SQL） |
-| --session-id | string | 否 | 分页会话 ID，传入后不解析 MQL 直接翻页 |
-| --group-pagination-list | array | 否 | 分组分页信息，首次查询可不传；翻页时传 `[{ "group_id": "分组ID", "page_num": 页码 }]` |
+| --mql | string | 首查必填 | MQL 查询语句（完整 SQL）。单次最多返回 50 条；`LIMIT n` 只用于截断（n ≤ 50），不用于翻页 |
+| --session-id | string | 翻页必填 | 翻页用。取自首查返回体的 `session_id`；翻页时只传 `--project-key` + `--session-id` + `--group-pagination-list`，不要再传 `--mql`，否则按新查询重新执行、翻页参数被忽略 |
+| --group-pagination-list | array | 翻页必填 | 翻页参数，与 `--session-id` 配合使用，首查不传。每页 50 条，总页数 = ceil(`list[0].count` / 50)；目前只支持传入一组 `[{"group_id":"<分组ID>","page_num":N}]` |
 
-**分组分页**：
-- `--group-pagination-list` 是数组，当前只支持传一组分页数据；元素结构为 `{ "group_id": string, "page_num": number }`
-- `group_id` 取首查返回的 `list[].group_infos[].group_id`；无分组查询返回的默认分组 ID 为 `"1"`，翻页时也传 `"1"`
-- `page_num` 从 1 开始；MQL 首查不传分页参数时默认返回第一页，单页最多 50 条。当前接口没有 `page_size` / `page_token` 子字段
-- 翻页时传首查返回的 `session_id` 和目标分组的分页参数；传 `session_id` 后后端不再解析 MQL，只按已有会话取对应分组页
+**翻页取全量**（要全部结果时必须走这条链路，不要用 `LIMIT offset, n` 翻页）：
+1. 首查只传 `--project-key` + `--mql`，返回第 1 页（最多 50 条）。
+   从返回体取 `session_id`、`list[0].count`、`list[0].group_infos[].group_id`；无分组查询的 `group_id` 为 `"1"`。
+2. 之后每页传 `--project-key` + `--session-id` + `--group-pagination-list '[{"group_id":"<分组ID>","page_num":N}]'`，不传 `--mql`。
+   `page_num` 从 2 取到 ceil(count/50)；第 1 页已由首查返回。
+3. 翻页响应里 `list` / `session_id` 为 null，总数只能从第 1 页拿；`session_id` 与非空 MQL 同传会重新执行 MQL、回到第 1 页。
 
 **要点**：
 - 先用 `workitem meta-fields` / `workitem meta-roles` 获取字段与角色配置；查不到直接报错不要继续
-- SELECT 后属性不宜过多，**优先使用字段 key**（如 `name`、`priority`、`status`）；返回按页返回，需全量时使用翻页参数
+- SELECT 后属性不宜过多，**优先使用字段 key**（如 `name`、`priority`、`status`）；单次最多 50 条，需全量时按上面「翻页取全量」用 `--session-id` + `--group-pagination-list` 逐页取
 
 ### workitem list-op-records
 查看工作项操作记录。
@@ -330,7 +331,7 @@ description: |
 | workitem_related_select | 关联工作项 ID | `"<work_item_id>"` |
 | workitem_related_multi_select | ID 数组（**stringified**，数字元素） | `"[<id1>,<id2>]"` |
 | role_owners（仅创建时） | 角色-人员对象数组（**stringified**） | `"[{\"role\":\"<role_id>\",\"owners\":[\"<userkey>\"]}]"` |
-| signal | option_id 字符串（**写入值位**；MQL 查询值位为 label，见 [mql-syntax.md §4](references/mql-syntax.md)） | `"<option_id>"`（以 `workitem meta-fields` 的 `options[].option_id` 为准；当前系统外信号常见 4 个 option：`passed` / `notpassed` / `processing` / `noinformationyet`） |
+| signal | option_id 字符串（**写入值位**；MQL 查询值位为 label，见 [mql-operators.md §1](references/mql-operators.md)） | `"<option_id>"`（以 `workitem meta-fields` 的 `options[].option_id` 为准；当前系统外信号常见 4 个 option：`passed` / `notpassed` / `processing` / `noinformationyet`） |
 | compound_field | 普通复合明细表（**stringified** action 对象） | `"{\"action\":\"add\",\"fields\":[[{\"field_key\":\"sub_key1\",\"field_value\":\"v1\"}]]}"` |
 | multi_user_compound_field | 多人复合明细表（**仅更新已有人员**；stringified userkey map，整体覆盖） | `"{\"userkey1\":[{\"field_key\":\"sub_key1\",\"field_value\":\"v1\"}],\"userkey2\":[]}"` |
 

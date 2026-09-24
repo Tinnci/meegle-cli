@@ -27,11 +27,15 @@ meegle <resource> <method> [flags] --format json
 几种方式，优先级从高到低：
 
 1. **Flag 模式**（推荐）：`--project-key PROJ --work-item-type story`
-2. **--fields 模式**（写工作项字段，可重复）：`--fields '{"field_key":"name","field_value":"任务标题"}' --fields '{"field_key":"priority","field_value":"1"}'`；`field_value` 支持任意 JSON 值（数组/对象原样传）
+2. **--fields 模式**（写工作项字段，可重复）：`--fields '{"field_key":"name","field_value":"任务标题"}' --fields '{"field_key":"priority","field_value":"1"}'`
 3. **--params 模式**（完整 JSON 兜底）：`--params '{"fields":[{"field_key":"name","field_value":"任务标题"}]}'`
 4. **--set 模式**（仅顶层参数快捷写法，不支持 fields[]）：`--set page_num=1` 等价于 `--page-num 1`，支持 dot-path 嵌套；不要用它写工作项字段
 
 Flag 覆盖 `--params`；`--set` 只影响顶层参数，**不会**写到 `fields[]`。
+
+**`field_value` 填写规则**：固定填字符串。标量直接填字符串，如 `"100"`、`"true"`；数组或对象填序列化后的 JSON 字符串，如 `"[\"u1\",\"u2\"]"`、`"{\"type\":\"auto\"}"`。不要给 `field_value` 传原生 number、array 或 object。
+
+此限制只针对 `field_value`；`fields`、`role_operate`、`node_schedule` 等参数仍按各自 schema 传原生数组或对象。
 
 ## 命令发现
 
