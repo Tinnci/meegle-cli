@@ -11,8 +11,6 @@ import (
 	"os/signal"
 	"syscall"
 
-	"golang.org/x/term"
-
 	productmeegle "github.com/larksuite/meegle-cli/internal/products/meegle"
 	"github.com/larksuite/meegle-cli/internal/products/meegle/commands"
 	meerrors "github.com/larksuite/meegle-cli/internal/products/meegle/errors"
@@ -52,7 +50,7 @@ func executeWithFactory(ctx context.Context, args []string, cliVersion string, f
 		_ = productmeegle.RunTelemetryMaintenance(ctx)
 		return 0
 	}
-	productmeegle.MaybeShowTelemetryDisclosure(os.Stderr, term.IsTerminal(int(os.Stderr.Fd())))
+	productmeegle.MaybeShowTelemetryDisclosure(os.Stderr)
 	tracker := productmeegle.StartCommandTelemetryWithVersion(args, cliVersion)
 	ctx = tracker.Context(ctx)
 	var (

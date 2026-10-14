@@ -240,33 +240,138 @@ func TestTelemetryDisclosureIsShownOnce(t *testing.T) {
 	configDir = t.TempDir()
 	t.Cleanup(func() { configDir = originalDir })
 	var output bytes.Buffer
-	MaybeShowTelemetryDisclosure(&output, true)
-	MaybeShowTelemetryDisclosure(&output, true)
+	MaybeShowTelemetryDisclosure(&output)
+	MaybeShowTelemetryDisclosure(&output)
 	if strings.Count(output.String(), "meegle telemetry disable") != 1 {
 		t.Fatalf("disclosure = %q", output.String())
 	}
 }
 
-func TestTelemetryDisclosureDoesNotTouchNonInteractiveOutputOrEnableCollection(t *testing.T) {
+func TestTelemetryDisclosureEnablesFirstNonInteractiveFailure(t *testing.T) {
 	originalDir := configDir
 	configDir = t.TempDir()
 	t.Cleanup(func() { configDir = originalDir })
+	t.Setenv("MEEGLE_TELEMETRY", "")
 	var output bytes.Buffer
-	MaybeShowTelemetryDisclosure(&output, false)
-	if output.Len() != 0 {
-		t.Fatalf("non-interactive disclosure output = %q", output.String())
+	MaybeShowTelemetryDisclosure(&output)
+	if !strings.Contains(output.String(), "meegle telemetry disable") {
+		t.Fatalf("missing non-interactive disclosure: %q", output.String())
 	}
 	due, err := telemetryevent.NewSettingsStore(telemetryConfigRoot()).DisclosureDue(telemetryDisclosureVersion)
-	if err != nil || !due {
+	if err != nil || due {
 		t.Fatalf("disclosure due = %v, err = %v", due, err)
+	}
+	tracker := StartCommandTelemetry([]string{"probe"})
+	if !tracker.collectionAllowed {
+		t.Fatal("first non-interactive command must allow collection after disclosure")
+	}
+}
+
+type failedDisclosureWriter struct{}
+
+func (failedDisclosureWriter) Write([]byte) (int, error) { return 0, errors.New("output unavailable") }
+
+func TestTelemetryDisclosureFailureDoesNotAuthorizeCollection(t *testing.T) {
+	for _, mode := range []string{"nil-writer", "output", "persistence", "environment", "hard-disable"} {
+		t.Run(mode, func(t *testing.T) {
+			originalDir := configDir
+			configDir = t.TempDir()
+			t.Cleanup(func() { configDir = originalDir })
+			t.Setenv("MEEGLE_TELEMETRY", "")
+			var output bytes.Buffer
+			switch mode {
+			case "nil-writer":
+				if err := EnsureTelemetryDisclosure(nil); err == nil {
+					t.Fatal("nil output must fail disclosure")
+				}
+			case "output":
+				if err := EnsureTelemetryDisclosure(failedDisclosureWriter{}); err == nil {
+					t.Fatal("failed output must fail disclosure")
+				}
+			case "persistence":
+				if err := os.MkdirAll(telemetryConfigRoot(), 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Mkdir(filepath.Join(telemetryConfigRoot(), ".disclosure-lock"), 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := EnsureTelemetryDisclosure(&output); err == nil {
+					t.Fatal("failed persistence must fail disclosure")
+				}
+			case "environment":
+				t.Setenv("MEEGLE_TELEMETRY", "disabled")
+				MaybeShowTelemetryDisclosure(&output)
+				if output.Len() != 0 {
+					t.Fatal("environment opt-out must suppress automatic notice")
+				}
+			case "hard-disable":
+				if err := SetTelemetryEnabled(false); err != nil {
+					t.Fatal(err)
+				}
+				MaybeShowTelemetryDisclosure(&output)
+			}
+			if tracker := StartCommandTelemetry([]string{"probe"}); tracker.collectionAllowed {
+				t.Fatal("failed disclosure or opt-out must prevent collection")
+			}
+		})
+	}
+}
+
+func TestTelemetryStatusMatchesCollectionGates(t *testing.T) {
+	for _, mode := range []string{"default", "profile-policy", "local-disabled", "environment", "missing-notice", "corrupt-notice", "corrupt-settings", "corrupt-policy"} {
+		t.Run(mode, func(t *testing.T) {
+			setupTelemetryCommandRuntime(t)
+			const profile = "selected"
+			if err := SaveProfileConfig(profile, MeegleConfig{Host: "meegle.com"}); err != nil {
+				t.Fatal(err)
+			}
+			route := resolveTelemetryRoute(profile)
+			switch mode {
+			case "profile-policy":
+				policy := telemetryevent.DefaultPolicy()
+				policy.Enabled = false
+				if err := telemetryevent.NewPolicyStore(route.PolicyRoot).ApplyRefresh(policy, true, time.Now()); err != nil {
+					t.Fatal(err)
+				}
+			case "local-disabled":
+				if err := SetTelemetryEnabled(false); err != nil {
+					t.Fatal(err)
+				}
+			case "environment":
+				t.Setenv("MEEGLE_TELEMETRY", "disabled")
+			case "missing-notice":
+				if err := os.Remove(filepath.Join(telemetryConfigRoot(), "disclosure.json")); err != nil {
+					t.Fatal(err)
+				}
+			case "corrupt-notice", "corrupt-settings", "corrupt-policy":
+				path := filepath.Join(telemetryConfigRoot(), "disclosure.json")
+				if mode == "corrupt-settings" {
+					path = filepath.Join(telemetryConfigRoot(), "settings.json")
+				} else if mode == "corrupt-policy" {
+					path = filepath.Join(route.PolicyRoot, "policy.json")
+				}
+				if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte("invalid"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			enabled, err := TelemetryEnabled(profile)
+			if wantErr := strings.HasPrefix(mode, "corrupt-"); (err != nil) != wantErr {
+				t.Fatalf("status error = %v, want error %v", err, wantErr)
+			}
+			tracker := StartCommandTelemetry([]string{"--profile", profile, "probe"})
+			if enabled != tracker.collectionAllowed || enabled != (mode == "default") {
+				t.Fatalf("status enabled=%v, command collection=%v, mode=%s", enabled, tracker.collectionAllowed, mode)
+			}
+		})
 	}
 }
 
 func setupTelemetryCommandRuntime(t *testing.T) {
 	t.Helper()
-	originalDir := configDir
-	configDir = t.TempDir()
-	t.Cleanup(func() { configDir = originalDir })
+	setupTestDir(t)
 	t.Setenv("MEEGLE_HOST", "meegle.com")
 	t.Setenv("MEEGLE_TELEMETRY", "")
 	if err := telemetryevent.NewSettingsStore(telemetryConfigRoot()).MarkDisclosureShown(telemetryDisclosureVersion); err != nil {

@@ -165,25 +165,47 @@ func telemetryDisabledByEnvironment() bool {
 	return strings.EqualFold(strings.TrimSpace(os.Getenv(telemetryControlEnv)), telemetryDisabledValue)
 }
 
-// MaybeShowTelemetryDisclosure prints only to an interactive terminal. Until
-// the notice is shown and persisted, StartCommandTelemetry leaves collection
-// disabled, so machine-readable and redirected invocations remain untouched.
-func MaybeShowTelemetryDisclosure(writer io.Writer, interactive bool) {
-	if writer == nil || !interactive || telemetryDisabledByEnvironment() {
+// MaybeShowTelemetryDisclosure makes a best-effort startup disclosure on stderr,
+// including for redirected invocations. Collection requires a persisted notice.
+func MaybeShowTelemetryDisclosure(writer io.Writer) {
+	if telemetryDisabledByEnvironment() {
 		return
+	}
+	_ = EnsureTelemetryDisclosure(writer)
+}
+
+// EnsureTelemetryDisclosure displays the current notice once and persists it.
+// Explicit enable uses the returned error before changing the local switch.
+func EnsureTelemetryDisclosure(writer io.Writer) error {
+	if writer == nil {
+		return errors.New("telemetry disclosure output is unavailable")
 	}
 	settings := telemetryevent.NewSettingsStore(telemetryConfigRoot())
 	due, err := settings.DisclosureDue(telemetryDisclosureVersion)
 	if err != nil || !due {
-		return
+		return err
 	}
 	_, err = fmt.Fprintln(writer, `Meegle CLI collects failed-command diagnostics by default to improve reliability.
 No command argument values, tokens, file paths, request/response bodies, or error messages are collected.
 Disable: meegle telemetry disable
 Enable:  meegle telemetry enable`)
-	if err == nil {
-		_ = settings.MarkDisclosureShown(telemetryDisclosureVersion)
+	if err != nil {
+		return err
 	}
+	return settings.MarkDisclosureShown(telemetryDisclosureVersion)
+}
+
+// TelemetryEnabled reads the collection gates without resolving credentials or
+// fetching remote policy. The policy snapshot matches command-start selection.
+func TelemetryEnabled(profile string) (bool, error) {
+	if telemetryDisabledByEnvironment() {
+		return false, nil
+	}
+	due, err := telemetryevent.NewSettingsStore(telemetryConfigRoot()).DisclosureDue(telemetryDisclosureVersion)
+	if err != nil || due {
+		return false, err
+	}
+	return newTelemetryReporter(resolveTelemetryRoute(profile)).Enabled()
 }
 
 func IsTelemetryMaintenanceArgs(args []string) bool {
