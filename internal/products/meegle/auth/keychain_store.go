@@ -4,6 +4,7 @@
 package auth
 
 import (
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,8 @@ import (
 )
 
 const serviceName = "meegle-cli"
+
+var credentialCommandContext = exec.CommandContext
 
 // errSecItemNotFound is the macOS Security framework's exit code for
 // `security find-generic-password` when the item is not present. We treat it
@@ -27,8 +30,15 @@ func NewKeychainStore(profile string) *KeychainStore {
 }
 
 func (s *KeychainStore) Load() (*TokenData, error) {
-	out, err := exec.Command("security", "find-generic-password", "-s", serviceName, "-a", s.account, "-w").Output()
+	return s.LoadContext(context.Background())
+}
+
+func (s *KeychainStore) LoadContext(ctx context.Context) (*TokenData, error) {
+	out, err := credentialCommandContext(ctx, "security", "find-generic-password", "-s", serviceName, "-a", s.account, "-w").Output()
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
 		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == errSecItemNotFound {
 			return nil, nil
 		}
@@ -73,9 +83,19 @@ func NewSecretToolStore(profile string) *SecretToolStore {
 }
 
 func (s *SecretToolStore) Load() (*TokenData, error) {
-	out, err := exec.Command("secret-tool", "lookup", "service", serviceName, "account", s.account).Output()
+	return s.LoadContext(context.Background())
+}
+
+func (s *SecretToolStore) LoadContext(ctx context.Context) (*TokenData, error) {
+	command := credentialCommandContext(ctx, "secret-tool", "lookup", "service", serviceName, "account", s.account)
+	var stderr strings.Builder
+	command.Stderr = &stderr
+	out, err := command.Output()
 	if err != nil {
-		if isSecretToolLookupNotFound(out, err) {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		if isSecretToolLookupNotFoundWithStderr(out, []byte(stderr.String()), err) {
 			return nil, nil
 		}
 		return nil, err
@@ -98,11 +118,15 @@ func (s *SecretToolStore) Load() (*TokenData, error) {
 // very first Load of a fresh user, when the keyring is reachable but
 // has no meegle-cli entry yet.
 func isSecretToolLookupNotFound(out []byte, err error) bool {
+	return isSecretToolLookupNotFoundWithStderr(out, nil, err)
+}
+
+func isSecretToolLookupNotFoundWithStderr(out, stderr []byte, err error) bool {
 	var exitErr *exec.ExitError
 	if !errors.As(err, &exitErr) {
 		return false
 	}
-	return exitErr.ExitCode() == 1 && len(out) == 0 && len(exitErr.Stderr) == 0
+	return exitErr.ExitCode() == 1 && len(out) == 0 && len(stderr) == 0 && len(exitErr.Stderr) == 0
 }
 
 func (s *SecretToolStore) Save(data *TokenData) error {

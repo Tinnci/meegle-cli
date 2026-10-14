@@ -66,24 +66,22 @@ func unwrapResponse(raw json.RawMessage) (*Response, error) {
 		allTexts = append(allTexts, entry.Text)
 	}
 
-	// Check isError BEFORE filtering logid, so error messages include logid text
-	if resp.IsError {
-		msg := strings.Join(allTexts, "\n")
-		if msg == "" {
-			msg = "server returned error"
-		}
-		return nil, meerrors.NewServerError("SERVER_CALL_FAILED", msg)
-	}
-
-	// Filter logid only for non-error responses
 	var dataTexts []string
 	for _, text := range allTexts {
 		if id, ok := stripLogIDPrefix(text); ok {
 			result.LogID = id
 			slog.Debug(text)
-		} else {
-			dataTexts = append(dataTexts, text)
+			continue
 		}
+		dataTexts = append(dataTexts, text)
+	}
+
+	if resp.IsError {
+		msg := strings.Join(dataTexts, "\n")
+		if msg == "" {
+			msg = "server returned error"
+		}
+		return nil, meerrors.NewServerError("SERVER_CALL_FAILED", msg).WithLogID(result.LogID)
 	}
 
 	if len(dataTexts) == 0 {

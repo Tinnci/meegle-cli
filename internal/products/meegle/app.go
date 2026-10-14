@@ -22,6 +22,7 @@ import (
 	"github.com/larksuite/meegle-cli/internal/products/meegle/mcpclient"
 	"github.com/larksuite/meegle-cli/internal/products/meegle/types"
 	"github.com/larksuite/meegle-cli/pkg/framework/executor"
+	"github.com/larksuite/meegle-cli/pkg/framework/observability"
 	"github.com/larksuite/meegle-cli/pkg/framework/registry"
 	"github.com/larksuite/meegle-cli/pkg/runtime/cliapp"
 )
@@ -43,7 +44,7 @@ var MeegleGlobalFlags = []registry.FlagDef{
 
 var credentialDeferredRootCommands = map[string]struct{}{
 	"auth": {}, "completion": {}, "config": {}, "extension": {},
-	"help": {}, "inspect": {}, "url": {}, "version": {},
+	"help": {}, "inspect": {}, "telemetry": {}, "url": {}, "version": {},
 }
 
 // shouldResolveCredentialAtBootstrap reports whether command discovery needs
@@ -217,18 +218,25 @@ type StaticCommands struct {
 	Inspect    *cobra.Command
 	Completion *cobra.Command
 	URL        *cobra.Command
+	Telemetry  *cobra.Command
 }
 
 // NewCLIApp assembles the meegle CLI application, injecting the four customization points.
 // staticCmds are optional static subcommands (auth/config/inspect) used to break circular dependencies.
 func NewCLIApp(version string, staticCmds *StaticCommands) (*cliapp.App, error) {
+	return NewCLIAppContext(context.Background(), version, staticCmds)
+}
+
+func NewCLIAppContext(ctx context.Context, version string, staticCmds *StaticCommands) (*cliapp.App, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	// 1. Load default configuration (graceful: use empty config on failure)
 	profileName, _ := GetCurrentProfileName()
 	profileName = profileNameFromArgs(os.Args[1:], profileName)
 	cfg, _ := LoadConfig(profileName)
 
 	// 2. Build MCP client (if host + token are configured)
-	ctx := context.Background()
 	httpClient, transportDiagnostics := exttransport.NewHTTPClientWithDiagnostics(ctx, http.DefaultClient)
 	plugins, err := platformruntime.Install(version)
 	if err != nil {
@@ -285,6 +293,7 @@ func NewCLIApp(version string, staticCmds *StaticCommands) (*cliapp.App, error) 
 	// 6. Assemble cliapp
 	customize := rootCustomizer(staticCmds, client, dynamicSetup, plugins.Diagnostics(), ident, transportDiagnostics)
 	return cliapp.New(
+		cliapp.WithInitContext(ctx),
 		cliapp.WithAppName("meegle"),
 		cliapp.WithVersion(version),
 		cliapp.WithSetup(registrySetup),
@@ -295,6 +304,7 @@ func NewCLIApp(version string, staticCmds *StaticCommands) (*cliapp.App, error) 
 			ctx = withCLIProfile(ctx, effectiveProfile)
 			if identitySnapshot != nil {
 				ctx = WithCLIIdentity(ctx, ident)
+				observability.SetEnvironment(ctx, classifyHost(ident.Host), telemetryCredentialSource(ident.Source))
 			}
 			return ctx
 		}),
@@ -410,6 +420,9 @@ Typical Workflows:
 			if staticCmds.URL != nil {
 				root.AddCommand(staticCmds.URL)
 			}
+			if staticCmds.Telemetry != nil {
+				root.AddCommand(staticCmds.Telemetry)
+			}
 		}
 		var mappingIssues []ToolMappingIssue
 		if setup != nil {
@@ -430,6 +443,21 @@ Typical Workflows:
 		}
 
 		RegisterFlagCompletions(root, client)
+	}
+}
+
+func telemetryCredentialSource(source IdentitySource) string {
+	switch source {
+	case SourceEnv:
+		return "env"
+	case SourceConfig:
+		return "config"
+	case SourceStore:
+		return "store"
+	case SourceExtension:
+		return "extension"
+	default:
+		return "unset"
 	}
 }
 
