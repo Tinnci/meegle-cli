@@ -3,7 +3,11 @@
 
 package pipeline
 
-import "context"
+import (
+	"context"
+
+	"github.com/larksuite/meegle-cli/pkg/framework/observability"
+)
 
 func (p *Pipeline) Execute(ctx context.Context, state *PipelineContext) error {
 	if p == nil {
@@ -16,6 +20,7 @@ func (p *Pipeline) Execute(ctx context.Context, state *PipelineContext) error {
 		if step == nil {
 			continue
 		}
+		observability.SetStep(ctx, step.Name())
 		if err := step.Execute(ctx, state); err != nil {
 			return err
 		}

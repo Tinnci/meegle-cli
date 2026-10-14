@@ -16,6 +16,7 @@ import (
 	frameworkadapter "github.com/larksuite/meegle-cli/pkg/framework/adapter"
 	frameworkerrors "github.com/larksuite/meegle-cli/pkg/framework/errors"
 	"github.com/larksuite/meegle-cli/pkg/framework/executor"
+	"github.com/larksuite/meegle-cli/pkg/framework/observability"
 	frameworkoutput "github.com/larksuite/meegle-cli/pkg/framework/output"
 	"github.com/larksuite/meegle-cli/pkg/framework/pipeline"
 	"github.com/larksuite/meegle-cli/pkg/framework/registry"
@@ -95,7 +96,7 @@ func New(opts ...Option) (*App, error) {
 	manager := config.Manager
 	if manager == nil {
 		manager = registry.NewManager(config.Setup)
-		if err := manager.Init(context.Background()); err != nil {
+		if err := manager.Init(config.InitContext); err != nil {
 			return nil, err
 		}
 	}
@@ -365,6 +366,13 @@ func (a *App) executeParsed(parsed *frameworkrouter.ParsedCommand) error {
 	ctx := context.Background()
 	if input != nil && input.Context != nil {
 		ctx = input.Context
+	}
+	if parsed != nil {
+		flagNames := make([]string, 0, len(parsed.ExplicitFlags))
+		for name := range parsed.ExplicitFlags {
+			flagNames = append(flagNames, name)
+		}
+		observability.SetCommand(ctx, parsed.FullPath, flagNames)
 	}
 	err := a.pipe.Execute(ctx, state)
 	if err == nil {

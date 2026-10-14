@@ -233,7 +233,8 @@ type mcpToolCaller interface {
 // batch step consumes). Declared here so mcpToolCaller does not force
 // test code to construct a real mcpclient.Response.
 type mcpResponse struct {
-	Data any
+	Data  any
+	LogID string
 }
 
 // BatchExecutorStep invokes a single underlying MCP tool once per ID for
@@ -322,6 +323,7 @@ func (s *BatchExecutorStep) Execute(ctx context.Context, state *pipeline.Pipelin
 				params[perItemParam] = coerceValue(ids[idx].String(), perItemType, perItemItems)
 				resp, callErr := client.CallTool(fanCtx, toolName, params)
 				if callErr != nil {
+					observeBackend(ctx, "meegle_mcp", "tools_call", meerrors.BackendLogID(callErr), callErr)
 					if meerrors.IsUnauthorized(callErr) {
 						authMu.Lock()
 						if firstErr == nil {
@@ -337,6 +339,7 @@ func (s *BatchExecutorStep) Execute(ctx context.Context, state *pipeline.Pipelin
 				var data any
 				if resp != nil {
 					data = resp.Data
+					observeBackend(ctx, "meegle_mcp", "tools_call", resp.LogID, nil)
 				}
 				results[idx] = batchItem{ID: ids[idx], Data: data}
 			}
@@ -394,7 +397,7 @@ func (a mcpClientAdapter) CallTool(ctx context.Context, name string, params map[
 	if resp == nil {
 		return nil, nil
 	}
-	return &mcpResponse{Data: resp.Data}, nil
+	return &mcpResponse{Data: resp.Data, LogID: resp.LogID}, nil
 }
 
 // batchItem is the intermediate per-id result held during fan-out.

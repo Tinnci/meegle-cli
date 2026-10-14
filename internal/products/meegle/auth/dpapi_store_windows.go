@@ -6,6 +6,7 @@
 package auth
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -26,6 +27,13 @@ func NewDPAPIStore(profile string) *DPAPIStore {
 }
 
 func (s *DPAPIStore) Load() (*TokenData, error) {
+	return s.LoadContext(context.Background())
+}
+
+func (s *DPAPIStore) LoadContext(ctx context.Context) (*TokenData, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	val, ok := registryGet(serviceName, s.account)
 	if !ok {
 		return nil, nil

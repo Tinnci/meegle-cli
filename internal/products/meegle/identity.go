@@ -167,6 +167,15 @@ func CLIIdentityFromContext(ctx context.Context) (ResolvedIdentity, bool) {
 // to call ResolveIdentity directly and is therefore isolated from init-time
 // CLI registrations.
 func ResolveCLIIdentity(ctx context.Context, cfg MeegleConfig, profileName string) (ResolvedIdentity, error) {
+	identity, err := resolveCLIIdentity(ctx, cfg, profileName, true)
+	if err == nil {
+		observeTelemetryIdentity(ctx, identity)
+	}
+	return identity, err
+}
+
+// Detached maintenance uses the same provider chain but never refreshes a stored token.
+func resolveCLIIdentity(ctx context.Context, cfg MeegleConfig, profileName string, refreshStoredToken bool) (ResolvedIdentity, error) {
 	if err := credential.Validate(); err != nil {
 		return ResolvedIdentity{}, err
 	}
@@ -251,7 +260,20 @@ func ResolveCLIIdentity(ctx context.Context, cfg MeegleConfig, profileName strin
 		return ResolvedIdentity{}, &cliConfigResolutionError{cause: builtInErr}
 	}
 	if !extensionTokenResolved && resolved.Token == "" {
-		resolved = attachStoredToken(resolved, accountProfile, expanded, auth.HTTPClient(ctx))
+		if refreshStoredToken {
+			resolved = attachStoredToken(resolved, accountProfile, expanded, auth.HTTPClient(ctx))
+		} else {
+			data, err := auth.LoadTokenSnapshot(ctx, auth.CreateTokenStore(accountProfile))
+			if err != nil {
+				return ResolvedIdentity{}, err
+			}
+			if err := ctx.Err(); err != nil {
+				return ResolvedIdentity{}, err
+			}
+			if data != nil && data.AccessToken != "" {
+				resolved.Token, resolved.Source = data.AccessToken, SourceStore
+			}
+		}
 	}
 	resolved.ProfileName = accountProfile
 
