@@ -498,7 +498,7 @@ func staticCommandRisk(path string) string {
 	case "version", "inspect", "auth/status", "config/show", "config/get",
 		"config/profile/list", "config/profile/current", "url/decode",
 		"extension/doctor", "extension/credentials", "extension/transport",
-		"extension/plugins", "extension/policy", "extension/discovery":
+		"extension/plugins", "extension/policy", "extension/discovery", "telemetry/status":
 		return "read"
 	default:
 		return "write"

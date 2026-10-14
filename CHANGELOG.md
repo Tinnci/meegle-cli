@@ -8,6 +8,16 @@ versioned section on each npm release.
 
 ## [Unreleased]
 
+## [v1.0.26] - 2026-10-14
+
+### Added
+
+- Added `meegle telemetry status` to show whether failed-command diagnostics are enabled under the current local settings, disclosure record, environment override and cached policy.
+
+### Fixed
+
+- First-use diagnostics disclosure is written to stderr and saved in non-interactive CI, Agent and redirected invocations, allowing default-enabled collection to take effect. Explicit `telemetry enable` completes any missing disclosure before enabling the local switch and reports disclosure failures as errors.
+
 ## [v1.0.25] - 2026-10-13
 
 ### Added

@@ -1032,7 +1032,7 @@ Dynamic discovery accepts nullable JSON Schema types such as `"type": ["string",
 
 ## Failed-command diagnostics
 
-After a one-time notice in an interactive terminal, Meegle CLI collects sampled diagnostics for final root commands that fail. Successful commands are not collected in schema v1. Collection never includes command argument values, tokens, file paths, request or response bodies, or error messages.
+Failed-command diagnostics are enabled by default. On first use, Meegle CLI writes a one-time notice to stderr and saves its record, including in CI, Agent and redirected invocations; stdout remains reserved for command results. After the notice is successfully written and saved, Meegle CLI collects sampled diagnostics for final root commands that fail. Successful commands are not collected in schema v1. Collection never includes command argument values, tokens, file paths, request or response bodies, or error messages.
 
 The foreground command selects a diagnostic event and hands it to a detached maintenance process. That process queues the event without scanning historical events, then performs cleanup, policy refresh and upload when due. The foreground does not wait for queue/sequence locks, event writes or network delivery. Command return is not confirmation that its event has been queued. Policy is refreshed at most every 12 hours (with a 1-hour retry after an unhealthy refresh). Pending events are isolated by profile and host. Background cleanup removes expired events and the oldest excess events to meet the global limits of 7 days, 1,000 events and 5 MiB. Writes can temporarily exceed these limits until maintenance runs. While the current profile/host has queued events, subsequent commands can trigger global cleanup once a minute, independently of credentials and the one-hour upload retry interval. Recording a new failure during upload cooldown does not retry the network request. Policy refresh also triggers maintenance. Switching to an empty queue does not itself schedule cleanup of inactive profiles. No resident daemon runs after the CLI exits.
 
@@ -1047,9 +1047,12 @@ Control collection locally:
 ```bash
 meegle telemetry disable  # also clears queued events
 meegle telemetry enable
+meegle telemetry status   # defaults to {"enabled": true} or {"enabled": false}
 ```
 
-Set `MEEGLE_TELEMETRY=disabled` to disable it for the current environment. The CLI journey event is separate from MCP server telemetry; when available, a structured backend `logid` is included only as a correlation reference.
+Explicit `enable` first writes and saves the current notice if it has not been recorded, then enables the local switch. Notice output or persistence failure returns an error without reporting successful enablement. `status` returns only whether collection is currently allowed, considering the local switch, disclosure record, environment override and locally stored policy snapshot for the current profile/host. It does not resolve credentials or refresh policy over the network, and supports `--format json|table|ndjson` (or `-o`). `enabled=true` does not confirm that any diagnostic has been uploaded.
+
+Set `MEEGLE_TELEMETRY=disabled` to disable it for the current environment and suppress automatic disclosure. Explicit `enable` can still complete disclosure and enable the local switch, but does not override the environment variable or remote policy restrictions. The CLI journey event is separate from MCP server telemetry; when available, a structured backend `logid` is included only as a correlation reference.
 
 ## FAQ
 
