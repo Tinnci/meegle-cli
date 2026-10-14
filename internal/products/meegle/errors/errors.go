@@ -104,6 +104,16 @@ func (e *MeegleError) WithCause(cause error) *MeegleError {
 	return e
 }
 
+// BackendLogID returns the structured backend trace id carried by err or any
+// wrapped MeegleError. It never parses free-form error text.
+func BackendLogID(err error) string {
+	var me *MeegleError
+	if !frameworkerrors.SafeAs(err, &me) || me == nil {
+		return ""
+	}
+	return strings.TrimSpace(me.LogID)
+}
+
 // NewClientError creates a client-side error (exit code 1).
 func NewClientError(code, message string) *MeegleError {
 	return &MeegleError{Code: code, Message: message, ExitCode: 1}

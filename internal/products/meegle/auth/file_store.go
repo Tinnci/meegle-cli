@@ -4,6 +4,7 @@
 package auth
 
 import (
+	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -154,6 +155,13 @@ func deriveKey(salt []byte, machineKey string) []byte {
 }
 
 func (s *FileStore) Load() (*TokenData, error) {
+	return s.LoadContext(context.Background())
+}
+
+func (s *FileStore) LoadContext(ctx context.Context) (*TokenData, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	data, err := os.ReadFile(s.filePath())
 	if err != nil {
 		return nil, nil
@@ -187,6 +195,9 @@ func (s *FileStore) Load() (*TokenData, error) {
 	var td TokenData
 	if err := json.Unmarshal(plaintext, &td); err != nil {
 		return nil, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	return &td, nil
 }

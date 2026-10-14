@@ -3,7 +3,10 @@
 
 package auth
 
-import "runtime"
+import (
+	"context"
+	"runtime"
+)
 
 type TokenData struct {
 	AccessToken  string `json:"access_token"`
@@ -16,6 +19,37 @@ type TokenStore interface {
 	Load() (*TokenData, error)
 	Save(data *TokenData) error
 	Clear() error
+}
+
+type contextTokenLoader interface {
+	LoadContext(context.Context) (*TokenData, error)
+}
+
+// LoadTokenSnapshot bounds credential reads for detached/background work.
+// Production stores implement LoadContext; the goroutine fallback preserves
+// compatibility for injected stores that only implement TokenStore.
+func LoadTokenSnapshot(ctx context.Context, store TokenStore) (*TokenData, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if contextual, ok := store.(contextTokenLoader); ok {
+		return contextual.LoadContext(ctx)
+	}
+	type result struct {
+		data *TokenData
+		err  error
+	}
+	results := make(chan result, 1)
+	go func() {
+		data, err := store.Load()
+		results <- result{data: data, err: err}
+	}()
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case loaded := <-results:
+		return loaded.data, loaded.err
+	}
 }
 
 // tokenRefreshLocker serializes the complete load-refresh-save sequence.

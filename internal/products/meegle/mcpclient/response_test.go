@@ -6,6 +6,8 @@ package mcpclient
 import (
 	"encoding/json"
 	"testing"
+
+	meerrors "github.com/larksuite/meegle-cli/internal/products/meegle/errors"
 )
 
 // The production MCP server emits the trace id as a content entry prefixed
@@ -34,6 +36,26 @@ func TestUnwrapResponse_CapturesLogIDFromLiveServerPrefix(t *testing.T) {
 	dataMap, ok := got.Data.(map[string]any)
 	if !ok || dataMap["ok"] != true {
 		t.Errorf("expected Data to be the JSON object {ok:true}, got %#v", got.Data)
+	}
+}
+
+func TestUnwrapResponse_ErrorCarriesLogIDWithoutAddingItToMessage(t *testing.T) {
+	raw := mustMarshal(t, mcpToolResponse{
+		Content: []mcpContentEntry{
+			{Type: "text", Text: "backend rejected the request"},
+			{Type: "text", Text: "log_id:trace-error-123"},
+		},
+		IsError: true,
+	})
+	_, err := unwrapResponse(raw)
+	if err == nil {
+		t.Fatal("expected backend error")
+	}
+	if got := meerrors.BackendLogID(err); got != "trace-error-123" {
+		t.Fatalf("BackendLogID() = %q", got)
+	}
+	if got := err.Error(); got != "backend rejected the request" {
+		t.Fatalf("error message = %q", got)
 	}
 }
 

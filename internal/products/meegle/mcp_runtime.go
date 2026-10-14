@@ -19,8 +19,10 @@ import (
 	meerrors "github.com/larksuite/meegle-cli/internal/products/meegle/errors"
 	"github.com/larksuite/meegle-cli/internal/products/meegle/mcpclient"
 	"github.com/larksuite/meegle-cli/internal/products/meegle/types"
+	frameworkerrors "github.com/larksuite/meegle-cli/pkg/framework/errors"
 	"github.com/larksuite/meegle-cli/pkg/framework/executor"
 	"github.com/larksuite/meegle-cli/pkg/framework/jsonvalue"
+	"github.com/larksuite/meegle-cli/pkg/framework/observability"
 	frameworkoutput "github.com/larksuite/meegle-cli/pkg/framework/output"
 	"github.com/larksuite/meegle-cli/pkg/framework/pipeline"
 	"github.com/larksuite/meegle-cli/pkg/framework/router"
@@ -85,10 +87,13 @@ func (s *McpExecutorStep) Execute(ctx context.Context, state *pipeline.PipelineC
 
 	client := newMcpClientFromState(state)
 
+	observability.SetStage(ctx, "request_send")
 	start := time.Now()
 	resp, err := client.CallTool(ctx, toolName, snakeParams)
 	duration := time.Since(start)
 	if err != nil {
+		observability.SetStage(ctx, "response_wait")
+		observeBackend(ctx, "meegle_mcp", "tools_call", meerrors.BackendLogID(err), err)
 		if me, ok := err.(*meerrors.MeegleError); ok && s.CommandsFunc != nil {
 			me.Message = sanitizeToolNames(me.Message, s.CommandsFunc())
 		}
@@ -96,6 +101,8 @@ func (s *McpExecutorStep) Execute(ctx context.Context, state *pipeline.PipelineC
 		return err
 	}
 	if resp != nil {
+		observability.SetStage(ctx, "response_parse")
+		observeBackend(ctx, "meegle_mcp", "tools_call", extractLogID(resp.LogID), nil)
 		data := resp.Data
 		if state.Parsed != nil {
 			if fn := LookupResultTransform(state.Parsed.FullPath); fn != nil {
@@ -121,6 +128,21 @@ func (s *McpExecutorStep) Execute(ctx context.Context, state *pipeline.PipelineC
 		}
 	}
 	return nil
+}
+
+func observeBackend(ctx context.Context, service, operation, logID string, err error) {
+	logID = extractLogID(logID)
+	if logID != "" {
+		observability.AddBackendRef(ctx, observability.BackendRef{
+			Service: service, Operation: operation, LogID: logID,
+		})
+		observability.SetReachability(ctx, "yes")
+		return
+	}
+	var me *meerrors.MeegleError
+	if err == nil || (frameworkerrors.SafeAs(err, &me) && me != nil && me.HTTPStatus > 0) {
+		observability.SetReachability(ctx, "yes")
+	}
 }
 
 // extractLogID returns the bare id for state.Metadata. mcpclient already
@@ -464,11 +486,13 @@ func paginateByToken(ctx context.Context, client *mcpclient.Client, toolName str
 		pageCount++
 
 		params := withParam(baseParams, tokenParam, currentToken)
+		observability.SetStage(ctx, "response_wait")
 		resp, err := client.CallTool(ctx, toolName, params)
 		if err != nil {
 			return nil, nil, step.sanitizeError(err, state, toolName)
 		}
 
+		observability.SetStage(ctx, "response_parse")
 		rawData := resp.Data
 		if transform != nil {
 			rawData = transform(rawData)
@@ -585,11 +609,13 @@ func paginateByPageNum(ctx context.Context, client *mcpclient.Client, toolName s
 		currentPage = nextPage
 
 		params := withParam(baseParams, "page_num", currentPage)
+		observability.SetStage(ctx, "response_wait")
 		resp, err := client.CallTool(ctx, toolName, params)
 		if err != nil {
 			return nil, nil, step.sanitizeError(err, state, toolName)
 		}
 
+		observability.SetStage(ctx, "response_parse")
 		rawData := resp.Data
 		if transform != nil {
 			rawData = transform(rawData)

@@ -4,6 +4,7 @@
 package auth
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync/atomic"
@@ -48,17 +49,24 @@ func (s *FallbackStore) Save(data *TokenData) error {
 }
 
 func (s *FallbackStore) Load() (*TokenData, error) {
+	return s.LoadContext(context.Background())
+}
+
+func (s *FallbackStore) LoadContext(ctx context.Context) (*TokenData, error) {
 	if !s.primaryFailed.Load() {
-		data, err := s.primary.Load()
+		data, err := LoadTokenSnapshot(ctx, s.primary)
 		if err == nil {
 			if data != nil {
 				return data, nil
 			}
 		} else {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
 			s.primaryFailed.Store(true)
 		}
 	}
-	return s.fallback.Load()
+	return LoadTokenSnapshot(ctx, s.fallback)
 }
 
 func (s *FallbackStore) Clear() error {

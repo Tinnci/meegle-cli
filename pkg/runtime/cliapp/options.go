@@ -31,6 +31,7 @@ type Config struct {
 	BeforeExecute    BeforeExecuteHook
 	AfterExecute     AfterExecuteHook
 	ContextDecorator ContextDecorator
+	InitContext      context.Context
 }
 
 // WithContextDecorator decorates only terminal CLI executions. Programmatic
@@ -48,6 +49,7 @@ func defaultConfig() Config {
 		Materializer: frameworkadapter.DefaultMaterializer{},
 		Stdout:       os.Stdout,
 		Stderr:       os.Stderr,
+		InitContext:  context.Background(),
 	}
 }
 
@@ -97,6 +99,14 @@ func WithStderr(stderr io.Writer) Option {
 
 func WithRootCommandCustomizer(customizer RootCommandCustomizer) Option {
 	return func(cfg *Config) { cfg.RootCustomizer = customizer }
+}
+
+func WithInitContext(ctx context.Context) Option {
+	return func(cfg *Config) {
+		if ctx != nil {
+			cfg.InitContext = ctx
+		}
+	}
 }
 
 func WithExecutionHooks(before BeforeExecuteHook, after AfterExecuteHook) Option {

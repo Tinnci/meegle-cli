@@ -99,10 +99,13 @@ meegle-all:
 		goarch=$${platform#*/}; \
 		ext=""; name_os=$$goos; \
 		if [ "$$goos" = "windows" ]; then ext=".exe"; name_os="win32"; fi; \
+		( \
+		if [ "$$goos" = "linux" ]; then export CGO_ENABLED=0; fi; \
 		GOOS=$$goos GOARCH=$$goarch \
 		go build -ldflags="$(MEEGLE_RELEASE_LDFLAGS)" \
 		-o $(NPM_BIN)/meegle-$$name_os-$$(echo $$goarch | sed 's/amd64/x64/')$$ext \
 		./cmd/meegle; \
+		); \
 	done
 	cp LICENSE npm/meegle/LICENSE
 

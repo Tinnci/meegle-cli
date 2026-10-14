@@ -133,8 +133,10 @@ func (runtime *CLIAPIRuntime) executeHandoff(ctx context.Context, state *pipelin
 		}
 		response, err := runtime.configProvider(state).Get(ctx)
 		if err != nil {
+			observeBackend(ctx, "meegle_api", "handoff_config", meerrors.BackendLogID(err), err)
 			return err
 		}
+		observeBackend(ctx, "meegle_api", "handoff_config", responseLogID(response), nil)
 		if response == nil {
 			return meerrors.NewServerError("HANDOFF_API_INVALID_RESPONSE", "CLI config API returned an empty response")
 		}
@@ -151,8 +153,10 @@ func (runtime *CLIAPIRuntime) executeHandoff(ctx context.Context, state *pipelin
 		}
 		response, err := runtime.client(state).CreateLink(ctx, request)
 		if err != nil {
+			observeBackend(ctx, "meegle_api", "handoff_create_link", meerrors.BackendLogID(err), err)
 			return err
 		}
+		observeBackend(ctx, "meegle_api", "handoff_create_link", responseLogID(response), nil)
 		if response == nil {
 			return meerrors.NewServerError("HANDOFF_API_INVALID_RESPONSE", "handoff API returned an empty response")
 		}
@@ -271,8 +275,10 @@ func (runtime *CLIAPIRuntime) executePreference(ctx context.Context, state *pipe
 		return meerrors.NewClientError("CLIENT_MISCONFIGURED", "unknown preference command handler")
 	}
 	if err != nil {
+		observeBackend(ctx, "meegle_api", "preference_update", meerrors.BackendLogID(err), err)
 		return err
 	}
+	observeBackend(ctx, "meegle_api", "preference_update", responseLogID(response), nil)
 	if response == nil {
 		return meerrors.NewServerError("HANDOFF_API_INVALID_RESPONSE", "preference API returned an empty response")
 	}
@@ -286,6 +292,24 @@ func (runtime *CLIAPIRuntime) executePreference(ctx context.Context, state *pipe
 	}
 	state.Result = localResultWithLogID(response, state, response.LogID)
 	return nil
+}
+
+func responseLogID(value any) string {
+	switch response := value.(type) {
+	case *cliapiclient.CLIConfig:
+		if response != nil {
+			return response.LogID
+		}
+	case *cliapiclient.CreateLinkResponse:
+		if response != nil {
+			return response.LogID
+		}
+	case *cliapiclient.PreferenceUpdateResult:
+		if response != nil {
+			return response.LogID
+		}
+	}
+	return ""
 }
 
 func (runtime *CLIAPIRuntime) sessionStep() *SessionStep {
